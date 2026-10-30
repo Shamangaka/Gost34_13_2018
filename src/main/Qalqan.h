@@ -1,6 +1,10 @@
+#pragma once
+// СТ РК 4009-2025 block cipher (Qalqan), after the reference code of
+// Appendix B, without its undefined behaviour and host byte-order dependence.
 #include <cstdint>
-#include <stdio.h>
-#include <assert.h>
+#include <cstddef>
+#include <cstdio>
+#include <bit>
 
 #define SHIFT 17
 #define MINBLOCKLEN 16
@@ -8,59 +12,41 @@
 #define MINKEYLEN 32
 #define MAXKEYLEN 128
 #define KEYLENSTEP 16
-#define RNDS(x) (16+(x-32)/16)
-#define ROTL(x,s) ((x<<s)|(x>>(32-s)))
-#define ROTL64(x,s) ((x<<s)|(x>>(64-s))) 
+#define RNDS(x) (16 + ((x) - 32) / 16)
 
-// Key expansion
-void Kexp(uint8_t* key, int klen, int blen, uint8_t* rkey);
+// std::rotl is defined for every shift count. The Appendix B macros computed
+// x >> (64 - s), i.e. a shift by 64 for the 0 rotation of Table 2, which is
+// undefined behaviour (Clang drops the 512-bit linear layer because of it).
+inline uint32_t ROTL(uint32_t x, int s) { return std::rotl(x, s); }
+inline uint64_t ROTL64(uint64_t x, int s) { return std::rotl(x, s); }
+
+// True for klen = 32..128 bytes in steps of 16 and blen = 16, 32 or 64 bytes.
+bool ValidParams(int klen, int blen);
+
+// Key expansion: writes RNDS(klen) * blen bytes. Returns false, writing
+// nothing, for an invalid key or block length.
+bool Kexp(const uint8_t* key, int klen, int blen, uint8_t* rkey);
 
 // Encrypting
-void linOp(void* d, void* r, int blocklen);
-void sBox(uint8_t* data, uint8_t* res, int blocklen);
-void AddRkX(uint8_t* block, uint8_t* rkey, int nr, int blen, uint8_t* res);
-void AddRk(uint8_t* block, uint8_t* rkey, int nr, int blen, uint8_t* res);
-void encrypt(uint8_t* data, uint8_t* rkey, int klen, int blen, uint8_t* res);
+void linOp(const uint8_t* d, uint8_t* r, int blocklen);
+void sBox(const uint8_t* data, uint8_t* res, int blocklen);
+void AddRkX(const uint8_t* block, const uint8_t* rkey, int nr, int blen, uint8_t* res);
+void AddRk(const uint8_t* block, const uint8_t* rkey, int nr, int blen, uint8_t* res);
+bool encrypt(const uint8_t* data, const uint8_t* rkey, int klen, int blen, uint8_t* res);
 
 // Decrypting
-void InvAddRk(uint8_t* block, uint8_t* rkey, int nr, int blen, uint8_t* res);
-void InvlinOp(void* d, void* r, int blocklen);
-void InvsBox(uint8_t* data, uint8_t* res, int blocklen);
-void decrypt(uint8_t* data, uint8_t* rkey, int klen, int blen, uint8_t* res);
+void InvAddRk(const uint8_t* block, const uint8_t* rkey, int nr, int blen, uint8_t* res);
+void InvlinOp(const uint8_t* d, uint8_t* r, int blocklen);
+void InvsBox(const uint8_t* data, uint8_t* res, int blocklen);
+bool decrypt(const uint8_t* data, const uint8_t* rkey, int klen, int blen, uint8_t* res);
 
 // PRNG
 void init(uint32_t ix);
-uint8_t rnext();	// (1103515245 * x + 12345 mod 2**32)[23..16]
+uint8_t rnext(); // (1103515245 * x + 12345 mod 2**32)[23..16]
 
-// Tests
-bool testAddRk();
-bool testInvAddRk();
-bool testInvSbox();
-bool testInvLinOp();
-bool testEncDec();
-bool testEtalon();
-bool TestFast();
-bool testEncDec_32_16();
-
-// Quality tests
-void KeyAvalanche();
-void KAvalAdditional(void f(uint8_t*, int, uint8_t*));
-double SpeedTestKexp(void f(uint8_t*, int, int, uint8_t*), int klen, int blen);
-double SpeedTestEnc(void f(uint8_t*, uint8_t*, int, int, uint8_t*), int klen, int blen);
-double SpeedTestFastEnc_32_16();
-
-// Test vectors generators
-void KexpTestVectors(FILE* f);
-void KexpV(uint8_t* key, int klen, int blen, uint8_t* rkey, FILE* f);
-void KexpVV(uint8_t* key, int klen, int blen, uint8_t* rkey, FILE* f);
+// Test vectors generators (Appendix A format)
+void KexpV(const uint8_t* key, int klen, int blen, uint8_t* rkey, FILE* f);
+void KexpVV(const uint8_t* key, int klen, int blen, uint8_t* rkey, FILE* f);
 void ETestVectors(FILE* f);
-void encryptV(uint8_t* data, uint8_t* rkey, int klen, int blen, uint8_t* res, FILE* f);
-
-// Fast implementations
-void encrypt_fast(uint8_t* data, uint8_t* rkey, int klen, int blen, uint8_t* res);
-void Qalqan_encrypt_32_16(uint8_t* clear, uint8_t* cipher, uint8_t* rkey);
-void Qalqan_encrypt_32_16v(uint8_t* clear, uint8_t* cipher, uint8_t* rkey);
-void Qalqan_decrypt_32_16(uint8_t* cipher, uint8_t* clear, uint8_t* rkey);
-
-void VerilogSBoxInit();
+void encryptV(const uint8_t* data, const uint8_t* rkey, int klen, int blen, uint8_t* res, FILE* f);
 void ShortTestVectors(FILE* f, FILE* src);
