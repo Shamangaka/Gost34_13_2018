@@ -369,3 +369,4 @@ output.txt
 # Generated test-vector outputs and build trees
 resources/output*.txt
 build/
+*.checked
