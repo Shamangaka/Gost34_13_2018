@@ -193,7 +193,7 @@ internal static class TestVectors
     static unsafe void ETestVectors(StreamWriter f)
     {
         byte* key = stackalloc byte[MAXKEYLEN], rkey = stackalloc byte[RNDS(MAXKEYLEN) * MAXBLOCKLEN];
-        byte* data = stackalloc byte[MAXBLOCKLEN], cipher = stackalloc byte[MAXBLOCKLEN];
+        byte* data2 = stackalloc byte[MAXBLOCKLEN], cipher2 = stackalloc byte[MAXBLOCKLEN];
         ReadOnlySpan<int> blen_vals = [16, 32, 64];
         for (int blen_ind = 0; blen_ind < 3; blen_ind++)
         {
@@ -202,14 +202,15 @@ internal static class TestVectors
             {
                 f.Write("\n***** Key expansion, key len = {0} *****\n", klen * 8);
                 KexpV(key, klen, blen, rkey, f);
-                byte* data2 = stackalloc byte[MAXBLOCKLEN], cipher2 = stackalloc byte[MAXBLOCKLEN];
+                new Span<byte>(data2, MAXBLOCKLEN).Clear();
+                new Span<byte>(cipher2, MAXBLOCKLEN).Clear();
                 f.Write("\n***** Encryption, key len = {0}, block len = {1} *****\n", klen * 8, blen * 8);
                 encryptV(data2, rkey, klen, blen, cipher2, f);
             }
         }
     }
 
-    static unsafe void ShortTestLin(StreamWriter f, FileStream src)
+    static unsafe void ShortTestLin(StreamWriter f, FileStream? src)
     {
         const int BLEN_CNT = 3;
         byte* din = stackalloc byte[MAXBLOCKLEN], dout = stackalloc byte[MAXBLOCKLEN];
@@ -239,15 +240,13 @@ internal static class TestVectors
         f.Write("\n");
     }
 
-    static unsafe void fread_s(byte* din, int bufferSize, int size, int count, FileStream src)
+    // Reads exactly count bytes (the previous version stored -1 as 0xff past end of file).
+    static unsafe void fread_s(byte* din, int bufferSize, int size, int count, FileStream? src)
     {
-        for (var i = 0; i < count; i++)
-        {
-            din[i] = (byte)src.ReadByte();
-        }
+        (src ?? throw new ArgumentNullException(nameof(src))).ReadExactly(new Span<byte>(din, count));
     }
 
-    static unsafe void ShortTestSBox(StreamWriter f, FileStream src)
+    static unsafe void ShortTestSBox(StreamWriter f, FileStream? src)
     {
         byte* din = stackalloc byte[MAXBLOCKLEN], dout = stackalloc byte[MAXBLOCKLEN];
         if (src == null)
@@ -276,7 +275,7 @@ internal static class TestVectors
         f.Write("\n\n");
     }
 
-    static unsafe void ShortTestKExp(StreamWriter f, FileStream src)
+    static unsafe void ShortTestKExp(StreamWriter f, FileStream? src)
     {
         byte* key = stackalloc byte[MAXKEYLEN], rkey = stackalloc byte[RNDS(MAXKEYLEN) * MAXBLOCKLEN];
         if (src == null)
@@ -294,7 +293,7 @@ internal static class TestVectors
         f.Write("\n");
     }
 
-    static unsafe void ShortTestBasicEnc(StreamWriter f, FileStream src)
+    static unsafe void ShortTestBasicEnc(StreamWriter f, FileStream? src)
     {
         byte* key = stackalloc byte[MINKEYLEN], rkey = stackalloc byte[RNDS(MINKEYLEN) * MINBLOCKLEN];
         byte* data = stackalloc byte[MINBLOCKLEN], cipher = stackalloc byte[MINBLOCKLEN];
@@ -319,10 +318,11 @@ internal static class TestVectors
         f.Write("\n");
     }
 
-    static unsafe void ShortTestEnc(StreamWriter f, FileStream src)
+    static unsafe void ShortTestEnc(StreamWriter f, FileStream? src)
     {
         byte* key = stackalloc byte[MAXKEYLEN], rkey = stackalloc byte[RNDS(MAXKEYLEN) * MAXBLOCKLEN];
-        byte* data = stackalloc byte[MAXBLOCKLEN], cipher = stackalloc byte[MAXBLOCKLEN];
+        byte* data = stackalloc byte[MAXBLOCKLEN];
+        byte* data2 = stackalloc byte[MAXBLOCKLEN], cipher2 = stackalloc byte[MAXBLOCKLEN];
         ReadOnlySpan<int> blen_vals = [16, 32, 64];
 
         if (src == null)
@@ -349,15 +349,17 @@ internal static class TestVectors
         for (int blen_ind = 0; blen_ind < 3; blen_ind++)
         {
             int blen = blen_vals[blen_ind];
-            byte* data2 = stackalloc byte[MAXBLOCKLEN], cipher2 = stackalloc byte[MAXBLOCKLEN];
-            Kexp(key, MINKEYLEN, blen, rkey);
+            new Span<byte>(data2, MAXBLOCKLEN).Clear(); // the vectors encrypt an all-zero block
+            new Span<byte>(cipher2, MAXBLOCKLEN).Clear();
+            if (!Kexp(key, MINKEYLEN, blen, rkey))
+                throw new InvalidOperationException("invalid key or block length");
             f.Write("\n***** Encryption, key length = {0}, block len = {1} *****\n", MINKEYLEN * 8, blen * 8);
             encryptV(data2, rkey, MINKEYLEN, blen, cipher2, f);
             f.Write("\n");
         }
     }
 
-    public static void ShortTestVectors(StreamWriter f, FileStream src)
+    public static void ShortTestVectors(StreamWriter f, FileStream? src)
     {
         ShortTestLin(f, src);
         ShortTestLin(f, src);
