@@ -9,6 +9,8 @@
     <Compile Include="Qalqan.fs" />
     <Compile Include="PRNG.fs" />
     <Compile Include="TestVectors.fs" />
+    <Compile Include="Modes.fs" />
+    <Compile Include="SelfTest.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
