@@ -365,3 +365,7 @@ MigrationBackup/
 FodyWeavers.xsd
 GostGolang/34_13_2018.exe
 output.txt
+
+# Generated test-vector outputs and build trees
+resources/output*.txt
+build/
