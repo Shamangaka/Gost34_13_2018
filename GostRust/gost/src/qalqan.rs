@@ -8,6 +8,8 @@ pub const MINKEYLEN: i32 = 32;
 pub const MAXKEYLEN: i32 = 128;
 pub const KEYLENSTEP: i32 = 16;
 
+// SB and ISB hold the correct S and S^-1. Tables 1 and 3 of СТ РК 4009-2025
+// misprint three cells each ("de", "ce", "1e" for dc, cc, 1c).
 pub const SB: [u8; 256] = [
     /* ded: OK, dif: 4, dip: 7, lin: 32, pow: 7, cor: 0, dst: 112, sac: 116..140, cyc: 256 */
     0xd1, 0xb5, 0xa6, 0x74, 0x2f, 0xb2, 0x03, 0x77, 0xae, 0xb3, 0x60, 0x95, 0xfd, 0xf8, 0xc7, 0xf0,
@@ -62,219 +64,146 @@ pub(crate) use RNDS;
 #[allow(non_snake_case)]
 #[inline]
 pub fn ROTL(x: u32, s: u32) -> u32 {
-    (x << s) | (x >> (32 - s))
+    x.rotate_left(s)
 }
 
 #[allow(non_snake_case)]
 #[inline]
 pub fn ROTL64(x: u64, s: u32) -> u64 {
-    x.wrapping_shl(s) | x.wrapping_shr(64 - s)
+    x.rotate_left(s)
 }
 
-fn lin334(din: &[u32], dout: &mut [u32]) {
-    let dout = dout.as_mut_ptr();
-    let din = din.as_ptr();
-    let c0 = C0.as_ptr();
-    unsafe {
-        *dout.add(0) = *din.add(0)
-            ^ ROTL(*din.add(1), *c0.add(0))
-            ^ ROTL(*din.add(2), *c0.add(1))
-            ^ ROTL(*din.add(3), *c0.add(2));
-        *dout.add(1) = *din.add(1)
-            ^ ROTL(*din.add(2), *c0.add(0))
-            ^ ROTL(*din.add(3), *c0.add(1))
-            ^ ROTL(*dout.add(0), *c0.add(2));
-        *dout.add(2) = *din.add(2)
-            ^ ROTL(*din.add(3), *c0.add(0))
-            ^ ROTL(*dout.add(0), *c0.add(1))
-            ^ ROTL(*dout.add(1), *c0.add(2));
-        *dout.add(3) = *din.add(3)
-            ^ ROTL(*dout.add(0), *c0.add(0))
-            ^ ROTL(*dout.add(1), *c0.add(1))
-            ^ ROTL(*dout.add(2), *c0.add(2));
+/// Error for a key length other than 32..=128 bytes in steps of 16, a block
+/// length other than 16, 32 or 64 bytes, or buffers that are too short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParamError;
+
+impl std::fmt::Display for ParamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("qalqan: key must be 32..128 bytes in steps of 16, block 16, 32 or 64 bytes")
     }
 }
 
-fn lin384(din: &[u32], dout: &mut [u32]) {
-    let dout = dout.as_mut_ptr();
-    let din = din.as_ptr();
-    let c1 = C1.as_ptr();
-    unsafe {
-        *dout.add(0) = *din.add(0)
-            ^ ROTL(*din.add(1), *c1.add(0))
-            ^ ROTL(*din.add(2), *c1.add(1))
-            ^ ROTL(*din.add(3), *c1.add(2))
-            ^ ROTL(*din.add(4), *c1.add(3))
-            ^ ROTL(*din.add(5), *c1.add(4))
-            ^ ROTL(*din.add(6), *c1.add(5))
-            ^ ROTL(*din.add(7), *c1.add(6));
-        *dout.add(1) = *din.add(1)
-            ^ ROTL(*din.add(2), *c1.add(0))
-            ^ ROTL(*din.add(3), *c1.add(1))
-            ^ ROTL(*din.add(4), *c1.add(2))
-            ^ ROTL(*din.add(5), *c1.add(3))
-            ^ ROTL(*din.add(6), *c1.add(4))
-            ^ ROTL(*din.add(7), *c1.add(5))
-            ^ ROTL(*dout.add(0), *c1.add(6));
-        *dout.add(2) = *din.add(2)
-            ^ ROTL(*din.add(3), *c1.add(0))
-            ^ ROTL(*din.add(4), *c1.add(1))
-            ^ ROTL(*din.add(5), *c1.add(2))
-            ^ ROTL(*din.add(6), *c1.add(3))
-            ^ ROTL(*din.add(7), *c1.add(4))
-            ^ ROTL(*dout.add(0), *c1.add(5))
-            ^ ROTL(*dout.add(1), *c1.add(6));
-        *dout.add(3) = *din.add(3)
-            ^ ROTL(*din.add(4), *c1.add(0))
-            ^ ROTL(*din.add(5), *c1.add(1))
-            ^ ROTL(*din.add(6), *c1.add(2))
-            ^ ROTL(*din.add(7), *c1.add(3))
-            ^ ROTL(*dout.add(0), *c1.add(4))
-            ^ ROTL(*dout.add(1), *c1.add(5))
-            ^ ROTL(*dout.add(2), *c1.add(6));
-        *dout.add(4) = *din.add(4)
-            ^ ROTL(*din.add(5), *c1.add(0))
-            ^ ROTL(*din.add(6), *c1.add(1))
-            ^ ROTL(*din.add(7), *c1.add(2))
-            ^ ROTL(*dout.add(0), *c1.add(3))
-            ^ ROTL(*dout.add(1), *c1.add(4))
-            ^ ROTL(*dout.add(2), *c1.add(5))
-            ^ ROTL(*dout.add(3), *c1.add(6));
-        *dout.add(5) = *din.add(5)
-            ^ ROTL(*din.add(6), *c1.add(0))
-            ^ ROTL(*din.add(7), *c1.add(1))
-            ^ ROTL(*dout.add(0), *c1.add(2))
-            ^ ROTL(*dout.add(1), *c1.add(3))
-            ^ ROTL(*dout.add(2), *c1.add(4))
-            ^ ROTL(*dout.add(3), *c1.add(5))
-            ^ ROTL(*dout.add(4), *c1.add(6));
-        *dout.add(6) = *din.add(6)
-            ^ ROTL(*din.add(7), *c1.add(0))
-            ^ ROTL(*dout.add(0), *c1.add(1))
-            ^ ROTL(*dout.add(1), *c1.add(2))
-            ^ ROTL(*dout.add(2), *c1.add(3))
-            ^ ROTL(*dout.add(3), *c1.add(4))
-            ^ ROTL(*dout.add(4), *c1.add(5))
-            ^ ROTL(*dout.add(5), *c1.add(6));
-        *dout.add(7) = *din.add(7)
-            ^ ROTL(*dout.add(0), *c1.add(0))
-            ^ ROTL(*dout.add(1), *c1.add(1))
-            ^ ROTL(*dout.add(2), *c1.add(2))
-            ^ ROTL(*dout.add(3), *c1.add(3))
-            ^ ROTL(*dout.add(4), *c1.add(4))
-            ^ ROTL(*dout.add(5), *c1.add(5))
-            ^ ROTL(*dout.add(6), *c1.add(6));
+impl std::error::Error for ParamError {}
+
+/// Key and block lengths in bytes allowed by section 5 of СТ РК 4009-2025.
+pub fn valid_params(klen: usize, blen: usize) -> bool {
+    (MINKEYLEN as usize..=MAXKEYLEN as usize).contains(&klen)
+        && klen % KEYLENSTEP as usize == 0
+        && matches!(blen, 16 | 32 | 64)
+}
+
+fn load32<const N: usize>(b: &[u8]) -> [u32; N] {
+    std::array::from_fn(|i| u32::from_le_bytes(b[4 * i..4 * i + 4].try_into().unwrap()))
+}
+
+fn load64<const N: usize>(b: &[u8]) -> [u64; N] {
+    std::array::from_fn(|i| u64::from_le_bytes(b[8 * i..8 * i + 8].try_into().unwrap()))
+}
+
+fn store32(b: &mut [u8], w: &[u32]) {
+    for (i, x) in w.iter().enumerate() {
+        b[4 * i..4 * i + 4].copy_from_slice(&x.to_le_bytes());
     }
 }
 
-fn lin388(din: &[u64], dout: &mut [u64]) {
-    let dout = dout.as_mut_ptr();
-    let din = din.as_ptr();
-    let c2 = C2.as_ptr();
-    unsafe {
-        *dout.add(0) = *din.add(0)
-            ^ ROTL64(*din.add(1), *c2.add(0))
-            ^ *din.add(2)
-            ^ ROTL64(*din.add(3), *c2.add(2))
-            ^ ROTL64(*din.add(4), *c2.add(3))
-            ^ ROTL64(*din.add(5), *c2.add(4))
-            ^ ROTL64(*din.add(6), *c2.add(5))
-            ^ ROTL64(*din.add(7), *c2.add(6));
-
-        *dout.add(1) = *din.add(1)
-            ^ ROTL64(*din.add(2), *c2.add(0))
-            ^ *din.add(3)
-            ^ ROTL64(*din.add(4), *c2.add(2))
-            ^ ROTL64(*din.add(5), *c2.add(3))
-            ^ ROTL64(*din.add(6), *c2.add(4))
-            ^ ROTL64(*din.add(7), *c2.add(5))
-            ^ ROTL64(*dout.add(0), *c2.add(6));
-
-        *dout.add(2) = *din.add(2)
-            ^ ROTL64(*din.add(3), *c2.add(0))
-            ^ *din.add(4)
-            ^ ROTL64(*din.add(5), *c2.add(2))
-            ^ ROTL64(*din.add(6), *c2.add(3))
-            ^ ROTL64(*din.add(7), *c2.add(4))
-            ^ ROTL64(*dout.add(0), *c2.add(5))
-            ^ ROTL64(*dout.add(1), *c2.add(6));
-
-        *dout.add(3) = *din.add(3)
-            ^ ROTL64(*din.add(4), *c2.add(0))
-            ^ *din.add(5)
-            ^ ROTL64(*din.add(6), *c2.add(2))
-            ^ ROTL64(*din.add(7), *c2.add(3))
-            ^ ROTL64(*dout.add(0), *c2.add(4))
-            ^ ROTL64(*dout.add(1), *c2.add(5))
-            ^ ROTL64(*dout.add(2), *c2.add(6));
-
-        *dout.add(4) = *din.add(4)
-            ^ ROTL64(*din.add(5), *c2.add(0))
-            ^ *din.add(6)
-            ^ ROTL64(*din.add(7), *c2.add(2))
-            ^ ROTL64(*dout.add(0), *c2.add(3))
-            ^ ROTL64(*dout.add(1), *c2.add(4))
-            ^ ROTL64(*dout.add(2), *c2.add(5))
-            ^ ROTL64(*dout.add(3), *c2.add(6));
-
-        *dout.add(5) = *din.add(5)
-            ^ ROTL64(*din.add(6), *c2.add(0))
-            ^ *din.add(7)
-            ^ ROTL64(*dout.add(0), *c2.add(2))
-            ^ ROTL64(*dout.add(1), *c2.add(3))
-            ^ ROTL64(*dout.add(2), *c2.add(4))
-            ^ ROTL64(*dout.add(3), *c2.add(5))
-            ^ ROTL64(*dout.add(4), *c2.add(6));
-
-        *dout.add(6) = *din.add(6)
-            ^ ROTL64(*din.add(7), *c2.add(0))
-            ^ *dout.add(0)
-            ^ ROTL64(*dout.add(1), *c2.add(2))
-            ^ ROTL64(*dout.add(2), *c2.add(3))
-            ^ ROTL64(*dout.add(3), *c2.add(4))
-            ^ ROTL64(*dout.add(4), *c2.add(5))
-            ^ ROTL64(*dout.add(5), *c2.add(6));
-
-        *dout.add(7) = *din.add(7)
-            ^ ROTL64(*dout.add(0), *c2.add(0))
-            ^ *dout.add(1)
-            ^ ROTL64(*dout.add(2), *c2.add(2))
-            ^ ROTL64(*dout.add(3), *c2.add(3))
-            ^ ROTL64(*dout.add(4), *c2.add(4))
-            ^ ROTL64(*dout.add(5), *c2.add(5))
-            ^ ROTL64(*dout.add(6), *c2.add(6));
+fn store64(b: &mut [u8], w: &[u64]) {
+    for (i, x) in w.iter().enumerate() {
+        b[8 * i..8 * i + 8].copy_from_slice(&x.to_le_bytes());
     }
 }
 
+/// Formula (1): for i = 0..n-1 in order,
+/// Word_i ^= XOR_{j=1}^{n-1} (Word_{(i+j) mod n} <<< C_{j-1}).
+macro_rules! lin_fwd {
+    ($w:expr, $c:expr) => {{
+        let n = $w.len();
+        for i in 0..n {
+            let mut x = $w[i];
+            for j in 1..n {
+                x ^= $w[(i + j) % n].rotate_left($c[j - 1]);
+            }
+            $w[i] = x;
+        }
+    }};
+}
+
+/// Formula (2): the same updates for i = n-1, ..., 0.
+macro_rules! lin_inv {
+    ($w:expr, $c:expr) => {{
+        let n = $w.len();
+        for i in (0..n).rev() {
+            let mut x = $w[i];
+            for j in 1..n {
+                x ^= $w[(i + j) % n].rotate_left($c[j - 1]);
+            }
+            $w[i] = x;
+        }
+    }};
+}
+
+fn lin334(din: &[u32; 4], dout: &mut [u32; 4]) {
+    *dout = *din;
+    lin_fwd!(dout, C0);
+}
+
+fn lin384(din: &[u32; 8], dout: &mut [u32; 8]) {
+    *dout = *din;
+    lin_fwd!(dout, C1);
+}
+
+fn lin388(din: &[u64; 8], dout: &mut [u64; 8]) {
+    *dout = *din;
+    lin_fwd!(dout, C2);
+}
+
+// The previous ilin334 used the shift constants in the wrong order for words
+// 2 and 1, so L^-1 was not the inverse of L for 128-bit blocks.
+fn ilin334(din: &[u32; 4], dout: &mut [u32; 4]) {
+    *dout = *din;
+    lin_inv!(dout, C0);
+}
+
+fn ilin384(din: &[u32; 8], dout: &mut [u32; 8]) {
+    *dout = *din;
+    lin_inv!(dout, C1);
+}
+
+fn ilin388(din: &[u64; 8], dout: &mut [u64; 8]) {
+    *dout = *din;
+    lin_inv!(dout, C2);
+}
+
+/// L (formula (1)) on little-endian words, as Appendix A requires. (The
+/// previous version cast `&[u8]` to `&[u32]`/`&[u64]`, which is undefined
+/// behaviour for unaligned buffers and depends on the host byte order.)
 pub fn linOp(d: &[u8], r: &mut [u8], blocklen: usize) {
     match blocklen {
         16 => {
-            let dp = d.as_ptr() as *const u32;
-            let din = unsafe { std::slice::from_raw_parts(dp, d.len() / 4) };
-            let rp = r.as_mut_ptr() as *mut u32;
-            let dout = unsafe { std::slice::from_raw_parts_mut(rp, r.len() / 4) };
-            lin334(din, dout);
+            let mut dout = [0u32; 4];
+            lin334(&load32::<4>(d), &mut dout);
+            store32(r, &dout);
         }
         32 => {
-            let dp = d.as_ptr() as *const u32;
-            let din = unsafe { std::slice::from_raw_parts(dp, d.len() / 4) };
-            let rp = r.as_mut_ptr() as *mut u32;
-            let dout = unsafe { std::slice::from_raw_parts_mut(rp, r.len() / 4) };
-            lin384(din, dout);
+            let mut dout = [0u32; 8];
+            lin384(&load32::<8>(d), &mut dout);
+            store32(r, &dout);
         }
         64 => {
-            let dp = d.as_ptr() as *const u64;
-            let din = unsafe { std::slice::from_raw_parts(dp, d.len() / 8) };
-            let rp = r.as_mut_ptr() as *mut u64;
-            let dout = unsafe { std::slice::from_raw_parts_mut(rp, r.len() / 8) };
-            lin388(din, dout);
+            let mut dout = [0u64; 8];
+            lin388(&load64::<8>(d), &mut dout);
+            store64(r, &dout);
         }
         _ => panic!("Unsupported block length {}", blocklen),
     }
 }
 
 #[allow(non_snake_case)]
-pub fn Kexp(key: &[u8], klen: usize, blen: usize, rkey: &mut [u8]) {
+/// Key expansion (section 8): writes RNDS(klen) * blen round-key bytes.
+pub fn Kexp(key: &[u8], klen: usize, blen: usize, rkey: &mut [u8]) -> Result<(), ParamError> {
+    if !valid_params(klen, blen) || key.len() < klen || rkey.len() < RNDS!(klen) * blen {
+        return Err(ParamError);
+    }
     let mut r0arr: [u8; 17] = [0; 17];
     let mut r1arr: [u8; 15] = [0; 15];
     let key = key.as_ptr();
@@ -330,6 +259,9 @@ pub fn Kexp(key: &[u8], klen: usize, blen: usize, rkey: &mut [u8]) {
             s = 0;
         }
     }
+    r0arr.fill(0);
+    r1arr.fill(0);
+    Ok(())
 }
 
 pub fn sBox(data: &[u8], res: &mut [u8], blen: usize) {
@@ -350,6 +282,14 @@ pub fn sBoxU(data: &[u8], res: &mut [u8], blen: usize) {
             *res.add(i) = *sb.add(*data.add(i) as usize);
         }
     }
+}
+
+fn sbox_in_place(b: &mut [u8]) {
+    b.iter_mut().for_each(|x| *x = SB[*x as usize]);
+}
+
+fn inv_sbox_in_place(b: &mut [u8]) {
+    b.iter_mut().for_each(|x| *x = ISB[*x as usize]);
 }
 
 pub fn AddRkX(block: &[u8], rkey: &[u8], nr: usize, blen: usize, res: &mut [u8]) {
@@ -378,241 +318,55 @@ pub fn AddRk(block: &[u8], rkey: &[u8], nr: usize, blen: usize, res: &mut [u8]) 
     }
 }
 
-fn encrypt(data: &[u8], rkey: &[u8], klen: usize, blen: usize, res: &mut [u8]) {
-    let mut block: [u8; MAXBLOCKLEN as usize] = [0; MAXBLOCKLEN as usize];
-    let mut block2: [u8; MAXBLOCKLEN as usize] = [0; MAXBLOCKLEN as usize];
+/// Encryption (section 9.1) with N = RNDS(klen) round keys.
+pub fn encrypt(data: &[u8], rkey: &[u8], klen: usize, blen: usize, res: &mut [u8]) -> Result<(), ParamError> {
+    if !valid_params(klen, blen) || data.len() < blen || res.len() < blen || rkey.len() < RNDS!(klen) * blen {
+        return Err(ParamError);
+    }
+    let mut block = [0u8; MAXBLOCKLEN as usize];
+    let mut block2 = [0u8; MAXBLOCKLEN as usize];
     AddRk(data, rkey, 0, blen, &mut block);
     sBox(&block, &mut block2, blen);
     linOp(&block2, &mut block, blen);
     for i in 1..RNDS!(klen) - 1 {
         AddRkX(&block, rkey, i, blen, &mut block2);
-        let b2s: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(block2.as_mut_ptr(), blen) };
-        sBox(&block2, b2s, blen);
+        sbox_in_place(&mut block2[..blen]);
         linOp(&block2, &mut block, blen);
     }
     AddRk(&block, rkey, RNDS!(klen) - 1, blen, res);
+    Ok(())
 }
 
+/// Subtraction of round key `nr` modulo 2^(8*blen), byte 0 least significant.
+/// (The previous version underflowed a u16 — a panic in debug builds — and
+/// lost the borrow after a logical shift in release builds.)
 pub fn InvAddRk(block: &[u8], rkey: &[u8], nr: usize, blen: usize, res: &mut [u8]) {
-    let block = block.as_ptr();
-    let rkey = rkey.as_ptr();
-    let res = res.as_mut_ptr();
-    unsafe {
-        let mut tmp: u16 = *block.add(0) as u16 - *rkey.add(nr * blen) as u16;
-        *res.add(0) = tmp as u8;
-        tmp >>= 8;
-        for i in 1..blen {
-            tmp += *block.add(i) as u16 - *rkey.add(blen * nr + i) as u16;
-            *res.add(i) = tmp as u8;
-            tmp >>= 8;
-        }
-    }
-}
-
-fn ilin334(din: &[u32], dout: &mut [u32]) {
-    let dout = dout.as_mut_ptr();
-    let din = din.as_ptr();
-    let c0 = C0.as_ptr();
-    unsafe {
-        *dout.add(3) = *din.add(3)
-            ^ ROTL(*din.add(0), *c0.add(0))
-            ^ ROTL(*din.add(1), *c0.add(1))
-            ^ ROTL(*din.add(2), *c0.add(2));
-        *dout.add(2) = *din.add(2)
-            ^ ROTL(*dout.add(3), *c0.add(2))
-            ^ ROTL(*din.add(0), *c0.add(0))
-            ^ ROTL(*din.add(1), *c0.add(1));
-        *dout.add(1) = *din.add(1)
-            ^ ROTL(*dout.add(2), *c0.add(1))
-            ^ ROTL(*dout.add(3), *c0.add(2))
-            ^ ROTL(*din.add(0), *c0.add(0));
-        *dout.add(0) = *din.add(0)
-            ^ ROTL(*dout.add(1), *c0.add(0))
-            ^ ROTL(*dout.add(2), *c0.add(1))
-            ^ ROTL(*dout.add(3), *c0.add(2));
-    }
-}
-
-fn ilin384(din: &[u32], dout: &mut [u32]) {
-    let dout = dout.as_mut_ptr();
-    let din = din.as_ptr();
-    let c1 = C1.as_ptr();
-    unsafe {
-        *dout.add(7) = *din.add(7)
-            ^ ROTL(*din.add(0), *c1.add(0))
-            ^ ROTL(*din.add(1), *c1.add(1))
-            ^ ROTL(*din.add(2), *c1.add(2))
-            ^ ROTL(*din.add(3), *c1.add(3))
-            ^ ROTL(*din.add(4), *c1.add(4))
-            ^ ROTL(*din.add(5), *c1.add(5))
-            ^ ROTL(*din.add(6), *c1.add(6));
-
-        *dout.add(6) = *din.add(6)
-            ^ ROTL(*dout.add(7), *c1.add(6))
-            ^ ROTL(*din.add(0), *c1.add(0))
-            ^ ROTL(*din.add(1), *c1.add(1))
-            ^ ROTL(*din.add(2), *c1.add(2))
-            ^ ROTL(*din.add(3), *c1.add(3))
-            ^ ROTL(*din.add(4), *c1.add(4))
-            ^ ROTL(*din.add(5), *c1.add(5));
-
-        *dout.add(5) = *din.add(5)
-            ^ ROTL(*dout.add(6), *c1.add(5))
-            ^ ROTL(*dout.add(7), *c1.add(6))
-            ^ ROTL(*din.add(0), *c1.add(0))
-            ^ ROTL(*din.add(1), *c1.add(1))
-            ^ ROTL(*din.add(2), *c1.add(2))
-            ^ ROTL(*din.add(3), *c1.add(3))
-            ^ ROTL(*din.add(4), *c1.add(4));
-
-        *dout.add(4) = *din.add(4)
-            ^ ROTL(*dout.add(5), *c1.add(4))
-            ^ ROTL(*dout.add(6), *c1.add(5))
-            ^ ROTL(*dout.add(7), *c1.add(6))
-            ^ ROTL(*din.add(0), *c1.add(0))
-            ^ ROTL(*din.add(1), *c1.add(1))
-            ^ ROTL(*din.add(2), *c1.add(2))
-            ^ ROTL(*din.add(3), *c1.add(3));
-
-        *dout.add(3) = *din.add(3)
-            ^ ROTL(*dout.add(4), *c1.add(3))
-            ^ ROTL(*dout.add(5), *c1.add(4))
-            ^ ROTL(*dout.add(6), *c1.add(5))
-            ^ ROTL(*dout.add(7), *c1.add(6))
-            ^ ROTL(*din.add(0), *c1.add(0))
-            ^ ROTL(*din.add(1), *c1.add(1))
-            ^ ROTL(*din.add(2), *c1.add(2));
-
-        *dout.add(2) = *din.add(2)
-            ^ ROTL(*dout.add(3), *c1.add(2))
-            ^ ROTL(*dout.add(4), *c1.add(3))
-            ^ ROTL(*dout.add(5), *c1.add(4))
-            ^ ROTL(*dout.add(6), *c1.add(5))
-            ^ ROTL(*dout.add(7), *c1.add(6))
-            ^ ROTL(*din.add(0), *c1.add(0))
-            ^ ROTL(*din.add(1), *c1.add(1));
-
-        *dout.add(1) = *din.add(1)
-            ^ ROTL(*dout.add(2), *c1.add(1))
-            ^ ROTL(*dout.add(3), *c1.add(2))
-            ^ ROTL(*dout.add(4), *c1.add(3))
-            ^ ROTL(*dout.add(5), *c1.add(4))
-            ^ ROTL(*dout.add(6), *c1.add(5))
-            ^ ROTL(*dout.add(7), *c1.add(6))
-            ^ ROTL(*din.add(0), *c1.add(0));
-
-        *dout.add(0) = *din.add(0)
-            ^ ROTL(*dout.add(1), *c1.add(0))
-            ^ ROTL(*dout.add(2), *c1.add(1))
-            ^ ROTL(*dout.add(3), *c1.add(2))
-            ^ ROTL(*dout.add(4), *c1.add(3))
-            ^ ROTL(*dout.add(5), *c1.add(4))
-            ^ ROTL(*dout.add(6), *c1.add(5))
-            ^ ROTL(*dout.add(7), *c1.add(6));
-    }
-}
-
-fn ilin388(din: &[u64], dout: &mut [u64]) {
-    let dout = dout.as_mut_ptr();
-    let din = din.as_ptr();
-    let c2 = C2.as_ptr();
-    unsafe {
-        *dout.add(7) = *din.add(7)
-            ^ ROTL64(*din.add(0), *c2.add(0))
-            ^ *din.add(1)
-            ^ ROTL64(*din.add(2), *c2.add(2))
-            ^ ROTL64(*din.add(3), *c2.add(3))
-            ^ ROTL64(*din.add(4), *c2.add(4))
-            ^ ROTL64(*din.add(5), *c2.add(5))
-            ^ ROTL64(*din.add(6), *c2.add(6));
-
-        *dout.add(6) = *din.add(6)
-            ^ ROTL64(*dout.add(7), *c2.add(0))
-            ^ ROTL64(*din.add(0), *c2.add(1))
-            ^ ROTL64(*din.add(1), *c2.add(2))
-            ^ ROTL64(*din.add(2), *c2.add(3))
-            ^ ROTL64(*din.add(3), *c2.add(4))
-            ^ ROTL64(*din.add(4), *c2.add(5))
-            ^ ROTL64(*din.add(5), *c2.add(6));
-
-        *dout.add(5) = *din.add(5)
-            ^ ROTL64(*dout.add(6), *c2.add(0))
-            ^ ROTL64(*dout.add(7), *c2.add(1))
-            ^ ROTL64(*din.add(0), *c2.add(2))
-            ^ ROTL64(*din.add(1), *c2.add(3))
-            ^ ROTL64(*din.add(2), *c2.add(4))
-            ^ ROTL64(*din.add(3), *c2.add(5))
-            ^ ROTL64(*din.add(4), *c2.add(6));
-
-        *dout.add(4) = *din.add(4)
-            ^ ROTL64(*dout.add(5), *c2.add(0))
-            ^ ROTL64(*dout.add(6), *c2.add(1))
-            ^ ROTL64(*dout.add(7), *c2.add(2))
-            ^ ROTL64(*din.add(0), *c2.add(3))
-            ^ ROTL64(*din.add(1), *c2.add(4))
-            ^ ROTL64(*din.add(2), *c2.add(5))
-            ^ ROTL64(*din.add(3), *c2.add(6));
-
-        *dout.add(3) = *din.add(3)
-            ^ ROTL64(*dout.add(4), *c2.add(0))
-            ^ ROTL64(*dout.add(5), *c2.add(1))
-            ^ ROTL64(*dout.add(6), *c2.add(2))
-            ^ ROTL64(*dout.add(7), *c2.add(3))
-            ^ ROTL64(*din.add(0), *c2.add(4))
-            ^ ROTL64(*din.add(1), *c2.add(5))
-            ^ ROTL64(*din.add(2), *c2.add(6));
-
-        *dout.add(2) = *din.add(2)
-            ^ ROTL64(*dout.add(3), *c2.add(0))
-            ^ ROTL64(*dout.add(4), *c2.add(1))
-            ^ ROTL64(*dout.add(5), *c2.add(2))
-            ^ ROTL64(*dout.add(6), *c2.add(3))
-            ^ ROTL64(*dout.add(7), *c2.add(4))
-            ^ ROTL64(*din.add(0), *c2.add(5))
-            ^ ROTL64(*din.add(1), *c2.add(6));
-
-        *dout.add(1) = *din.add(1)
-            ^ ROTL64(*dout.add(2), *c2.add(0))
-            ^ ROTL64(*dout.add(3), *c2.add(1))
-            ^ ROTL64(*dout.add(4), *c2.add(2))
-            ^ ROTL64(*dout.add(5), *c2.add(3))
-            ^ ROTL64(*dout.add(6), *c2.add(4))
-            ^ ROTL64(*dout.add(7), *c2.add(5))
-            ^ ROTL64(*din.add(0), *c2.add(6));
-
-        *dout.add(0) = *din.add(0)
-            ^ ROTL64(*dout.add(1), *c2.add(0))
-            ^ ROTL64(*dout.add(2), *c2.add(1))
-            ^ ROTL64(*dout.add(3), *c2.add(2))
-            ^ ROTL64(*dout.add(4), *c2.add(3))
-            ^ ROTL64(*dout.add(5), *c2.add(4))
-            ^ ROTL64(*dout.add(6), *c2.add(5))
-            ^ ROTL64(*dout.add(7), *c2.add(6));
+    let mut borrow = 0u16;
+    for i in 0..blen {
+        let d = (block[i] as u16)
+            .wrapping_sub(rkey[blen * nr + i] as u16)
+            .wrapping_sub(borrow);
+        res[i] = d as u8;
+        borrow = (d >> 8) & 1;
     }
 }
 
 pub fn InvlinOp(d: &[u8], r: &mut [u8], blocklen: usize) {
     match blocklen {
         16 => {
-            let dp = d.as_ptr() as *const u32;
-            let din = unsafe { std::slice::from_raw_parts(dp, d.len() / 4) };
-            let rp = r.as_mut_ptr() as *mut u32;
-            let dout = unsafe { std::slice::from_raw_parts_mut(rp, r.len() / 4) };
-            ilin334(din, dout);
+            let mut dout = [0u32; 4];
+            ilin334(&load32::<4>(d), &mut dout);
+            store32(r, &dout);
         }
         32 => {
-            let dp = d.as_ptr() as *const u32;
-            let din = unsafe { std::slice::from_raw_parts(dp, d.len() / 4) };
-            let rp = r.as_mut_ptr() as *mut u32;
-            let dout = unsafe { std::slice::from_raw_parts_mut(rp, r.len() / 4) };
-            ilin384(din, dout);
+            let mut dout = [0u32; 8];
+            ilin384(&load32::<8>(d), &mut dout);
+            store32(r, &dout);
         }
         64 => {
-            let dp = d.as_ptr() as *const u64;
-            let din = unsafe { std::slice::from_raw_parts(dp, d.len() / 8) };
-            let rp = r.as_mut_ptr() as *mut u64;
-            let dout = unsafe { std::slice::from_raw_parts_mut(rp, r.len() / 8) };
-            ilin388(din, dout);
+            let mut dout = [0u64; 8];
+            ilin388(&load64::<8>(d), &mut dout);
+            store64(r, &dout);
         }
         _ => panic!("Unsupported block length {}", blocklen),
     }
@@ -627,18 +381,83 @@ pub fn InvsBox(data: &[u8], res: &mut [u8], blen: usize) {
         });
 }
 
-fn decrypt(data: &[u8], rkey: &[u8], klen: usize, blen: usize, res: &mut [u8]) {
-    let mut block: [u8; MAXBLOCKLEN as usize] = [0; MAXBLOCKLEN as usize];
-    let mut block2: [u8; MAXBLOCKLEN as usize] = [0; MAXBLOCKLEN as usize];
+/// Decryption (section 9.2). The middle rounds remove the round key with XOR
+/// (the previous version used the modular addition AddRk there).
+pub fn decrypt(data: &[u8], rkey: &[u8], klen: usize, blen: usize, res: &mut [u8]) -> Result<(), ParamError> {
+    if !valid_params(klen, blen) || data.len() < blen || res.len() < blen || rkey.len() < RNDS!(klen) * blen {
+        return Err(ParamError);
+    }
+    let mut block = [0u8; MAXBLOCKLEN as usize];
+    let mut block2 = [0u8; MAXBLOCKLEN as usize];
     InvAddRk(data, rkey, RNDS!(klen) - 1, blen, &mut block);
     for i in (1..RNDS!(klen) - 1).rev() {
         InvlinOp(&block, &mut block2, blen);
-        let b2s: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(block2.as_mut_ptr(), blen) };
-        InvsBox(&block2, b2s, blen);
-        AddRk(&block2, rkey, i, blen, &mut block);
+        inv_sbox_in_place(&mut block2[..blen]);
+        AddRkX(&block2, rkey, i, blen, &mut block);
     }
     InvlinOp(&block, &mut block2, blen);
-    let b2s: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(block2.as_mut_ptr(), blen) };
-    InvsBox(&block2, b2s, blen);
+    inv_sbox_in_place(&mut block2[..blen]);
     InvAddRk(&block2, rkey, 0, blen, res);
+    Ok(())
+}
+
+/// An expanded key for one block length.
+pub struct Cipher {
+    klen: usize,
+    blen: usize,
+    rkey: Vec<u8>,
+}
+
+impl Cipher {
+    /// `key`: 32..=128 bytes in steps of 16; `block_size`: 16, 32 or 64 bytes.
+    pub fn new(key: &[u8], block_size: usize) -> Result<Self, ParamError> {
+        if !valid_params(key.len(), block_size) {
+            return Err(ParamError);
+        }
+        let mut rkey = vec![0u8; RNDS!(key.len()) * block_size];
+        Kexp(key, key.len(), block_size, &mut rkey)?;
+        Ok(Cipher { klen: key.len(), blen: block_size, rkey })
+    }
+
+    pub fn block_size(&self) -> usize {
+        self.blen
+    }
+
+    /// Number of round keys N = 16 + (KLen - 256) / 128.
+    pub fn rounds(&self) -> usize {
+        RNDS!(self.klen)
+    }
+
+    /// Encrypts one block; panics if `input` or `output` is shorter than a block.
+    pub fn encrypt_block(&self, input: &[u8], output: &mut [u8]) {
+        encrypt(input, &self.rkey, self.klen, self.blen, output).expect("full block")
+    }
+
+    /// Decrypts one block; panics if `input` or `output` is shorter than a block.
+    pub fn decrypt_block(&self, input: &[u8], output: &mut [u8]) {
+        decrypt(input, &self.rkey, self.klen, self.blen, output).expect("full block")
+    }
+
+    /// Encrypts one block in place.
+    pub fn encrypt_in_place(&self, block: &mut [u8]) {
+        let mut tmp = [0u8; MAXBLOCKLEN as usize];
+        tmp[..self.blen].copy_from_slice(&block[..self.blen]);
+        self.encrypt_block(&tmp[..self.blen], block);
+    }
+
+    /// Decrypts one block in place.
+    pub fn decrypt_in_place(&self, block: &mut [u8]) {
+        let mut tmp = [0u8; MAXBLOCKLEN as usize];
+        tmp[..self.blen].copy_from_slice(&block[..self.blen]);
+        self.decrypt_block(&tmp[..self.blen], block);
+    }
+}
+
+impl Drop for Cipher {
+    fn drop(&mut self) {
+        for b in self.rkey.iter_mut() {
+            // volatile so the wipe is not optimised away
+            unsafe { std::ptr::write_volatile(b, 0) };
+        }
+    }
 }
