@@ -1,6 +1,8 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 
+use zeroize::Zeroizing;
+
 pub const SHIFT: i32 = 17;
 pub const MINBLOCKLEN: i32 = 16;
 pub const MAXBLOCKLEN: i32 = 64;
@@ -178,6 +180,9 @@ fn ilin388(din: &[u64; 8], dout: &mut [u64; 8]) {
 /// previous version cast `&[u8]` to `&[u32]`/`&[u64]`, which is undefined
 /// behaviour for unaligned buffers and depends on the host byte order.)
 pub fn linOp(d: &[u8], r: &mut [u8], blocklen: usize) {
+    assert!(matches!(blocklen, 16 | 32 | 64), "linOp: unsupported block length");
+    assert!(d.len() >= blocklen, "linOp: input shorter than blocklen");
+    assert!(r.len() >= blocklen, "linOp: output shorter than blocklen");
     match blocklen {
         16 => {
             let mut dout = [0u32; 4];
@@ -194,7 +199,7 @@ pub fn linOp(d: &[u8], r: &mut [u8], blocklen: usize) {
             lin388(&load64::<8>(d), &mut dout);
             store64(r, &dout);
         }
-        _ => panic!("Unsupported block length {}", blocklen),
+        _ => unreachable!(),
     }
 }
 
@@ -204,83 +209,70 @@ pub fn Kexp(key: &[u8], klen: usize, blen: usize, rkey: &mut [u8]) -> Result<(),
     if !valid_params(klen, blen) || key.len() < klen || rkey.len() < RNDS!(klen) * blen {
         return Err(ParamError);
     }
-    let mut r0arr: [u8; 17] = [0; 17];
-    let mut r1arr: [u8; 15] = [0; 15];
-    let key = key.as_ptr();
-    let r0 = r0arr.as_mut_ptr();
-    let r1 = r1arr.as_mut_ptr();
-    let addk = klen - 32;
-    let mut step = 0;
-    let mut s = SHIFT as usize;
-    let rkey = rkey.as_mut_ptr();
-    unsafe {
-        for i in 0..15usize {
-            *r0.add(i) = *key.add(2 * i);
-            *r1.add(i) = *key.add(2 * i + 1);
-        }
-        *r0.add(15) = *key.add(30);
-        *r0.add(16) = *key.add(31);
-        let sb = SB.as_ptr();
-        for r in 0..RNDS!(klen) {
-            for k in 0..(blen + s) {
-                let mut t0: u8 = (*sb.add(*r0.add(0) as usize))
-                    .wrapping_add(*r0.add(1))
-                    .wrapping_add(*sb.add(*r0.add(3) as usize))
-                    .wrapping_add(*r0.add(7))
-                    .wrapping_add(*sb.add(*r0.add(12) as usize))
-                    .wrapping_add(*r0.add(16));
-
-                let mut t1: u8 = (*sb.add(*r1.add(0) as usize))
-                    .wrapping_add(*r1.add(3))
-                    .wrapping_add(*sb.add(*r1.add(9) as usize))
-                    .wrapping_add(*r1.add(12))
-                    .wrapping_add(*sb.add(*r1.add(14) as usize));
-                for i in 0..14usize {
-                    *r0.add(i) = *r0.add(i + 1);
-                    *r1.add(i) = *r1.add(i + 1);
-                }
-                *r0.add(14) = *r0.add(15);
-                *r0.add(15) = *r0.add(16);
-                if k >= s {
-                    let rkey_idx = r * blen + k - s;
-                    *rkey.add(rkey_idx) = t0.wrapping_add(*r1.add(4));
-                    if step < addk {
-                        if step & 1 != 0 {
-                            t0 = t0.wrapping_add(*key.add(32 + step));
-                        } else {
-                            t1 = t1.wrapping_add(*key.add(32 + step));
-                        }
-                        step += 1;
-                    }
-                }
-                *r0.add(16) = t0;
-                *r1.add(14) = t1;
-            }
-            s = 0;
-        }
+    let mut r0 = Zeroizing::new([0u8; 17]);
+    let mut r1 = Zeroizing::new([0u8; 15]);
+    for i in 0..15 {
+        r0[i] = key[2 * i];
+        r1[i] = key[2 * i + 1];
     }
-    r0arr.fill(0);
-    r1arr.fill(0);
+    r0[15] = key[30];
+    r0[16] = key[31];
+
+    let addk = klen - 32;
+    let mut step = 0usize;
+    let mut prerun = SHIFT as usize;
+    for round in 0..RNDS!(klen) {
+        for k in 0..(blen + prerun) {
+            let mut t0 = SB[r0[0] as usize]
+                .wrapping_add(r0[1])
+                .wrapping_add(SB[r0[3] as usize])
+                .wrapping_add(r0[7])
+                .wrapping_add(SB[r0[12] as usize])
+                .wrapping_add(r0[16]);
+            let mut t1 = SB[r1[0] as usize]
+                .wrapping_add(r1[3])
+                .wrapping_add(SB[r1[9] as usize])
+                .wrapping_add(r1[12])
+                .wrapping_add(SB[r1[14] as usize]);
+
+            // Shift registers left by one byte: exactly the Appendix B operation.
+            r0.copy_within(1..17, 0);
+            r1.copy_within(1..15, 0);
+            if k >= prerun {
+                let idx = round * blen + k - prerun;
+                rkey[idx] = t0.wrapping_add(r1[4]);
+                if step < addk {
+                    if step & 1 != 0 {
+                        t0 = t0.wrapping_add(key[32 + step]);
+                    } else {
+                        t1 = t1.wrapping_add(key[32 + step]);
+                    }
+                    step += 1;
+                }
+            }
+            r0[16] = t0;
+            r1[14] = t1;
+        }
+        prerun = 0;
+    }
+    // r0/r1 are securely cleared on scope exit, including unwinding.
     Ok(())
 }
 
 pub fn sBox(data: &[u8], res: &mut [u8], blen: usize) {
-    data.iter()
-        .take(blen)
-        .zip(res.iter_mut().take(blen))
-        .for_each(|(d, r)| {
-            *r = SB[*d as usize];
-        });
+    assert!(data.len() >= blen, "sBox: input shorter than blen");
+    assert!(res.len() >= blen, "sBox: output shorter than blen");
+    for i in 0..blen {
+        res[i] = SB[data[i] as usize];
+    }
 }
 
 pub fn sBoxU(data: &[u8], res: &mut [u8], blen: usize) {
-    let res = res.as_mut_ptr();
-    let sb = SB.as_ptr();
-    let data = data.as_ptr();
-    unsafe {
-        for i in 0..blen {
-            *res.add(i) = *sb.add(*data.add(i) as usize);
-        }
+    // Public safe API: never dereference raw pointers based on unchecked lengths.
+    assert!(data.len() >= blen, "sBoxU: input shorter than blen");
+    assert!(res.len() >= blen, "sBoxU: output shorter than blen");
+    for i in 0..blen {
+        res[i] = SB[data[i] as usize];
     }
 }
 
@@ -293,28 +285,29 @@ fn inv_sbox_in_place(b: &mut [u8]) {
 }
 
 pub fn AddRkX(block: &[u8], rkey: &[u8], nr: usize, blen: usize, res: &mut [u8]) {
-    block
-        .iter()
-        .zip(rkey.iter().skip(nr * blen).take(blen))
-        .zip(res.iter_mut())
-        .for_each(|((b, k), r)| {
-            *r = *b ^ *k;
-        });
+    let start = nr.checked_mul(blen).expect("AddRkX: round offset overflow");
+    let end = start.checked_add(blen).expect("AddRkX: round end overflow");
+    assert!(block.len() >= blen, "AddRkX: input shorter than blen");
+    assert!(res.len() >= blen, "AddRkX: output shorter than blen");
+    assert!(rkey.len() >= end, "AddRkX: round key out of bounds");
+    for i in 0..blen {
+        res[i] = block[i] ^ rkey[start + i];
+    }
 }
 
 pub fn AddRk(block: &[u8], rkey: &[u8], nr: usize, blen: usize, res: &mut [u8]) {
-    let block = block.as_ptr();
-    let rkey = rkey.as_ptr();
-    let res = res.as_mut_ptr();
-    unsafe {
-        let mut tmp: u16 = *block.add(0) as u16 + *rkey.add(nr * blen) as u16;
-        *res.add(0) = tmp as u8;
-        tmp >>= 8;
-        for i in 1..blen {
-            tmp += *block.add(i) as u16 + *rkey.add(blen * nr + i) as u16;
-            *res.add(i) = tmp as u8;
-            tmp >>= 8;
-        }
+    // Checked arithmetic prevents index wraparound for untrusted round numbers.
+    let start = nr.checked_mul(blen).expect("AddRk: round offset overflow");
+    let end = start.checked_add(blen).expect("AddRk: round end overflow");
+    assert!(block.len() >= blen, "AddRk: input shorter than blen");
+    assert!(res.len() >= blen, "AddRk: output shorter than blen");
+    assert!(rkey.len() >= end, "AddRk: round key out of bounds");
+
+    let mut carry: u16 = 0;
+    for i in 0..blen {
+        let sum = (block[i] as u16) + (rkey[start + i] as u16) + carry;
+        res[i] = sum as u8;
+        carry = sum >> 8;
     }
 }
 
@@ -323,17 +316,17 @@ pub fn encrypt(data: &[u8], rkey: &[u8], klen: usize, blen: usize, res: &mut [u8
     if !valid_params(klen, blen) || data.len() < blen || res.len() < blen || rkey.len() < RNDS!(klen) * blen {
         return Err(ParamError);
     }
-    let mut block = [0u8; MAXBLOCKLEN as usize];
-    let mut block2 = [0u8; MAXBLOCKLEN as usize];
-    AddRk(data, rkey, 0, blen, &mut block);
-    sBox(&block, &mut block2, blen);
-    linOp(&block2, &mut block, blen);
+    let mut block = Zeroizing::new([0u8; MAXBLOCKLEN as usize]);
+    let mut block2 = Zeroizing::new([0u8; MAXBLOCKLEN as usize]);
+    AddRk(data, rkey, 0, blen, &mut block[..]);
+    sBox(&block[..], &mut block2[..], blen);
+    linOp(&block2[..], &mut block[..], blen);
     for i in 1..RNDS!(klen) - 1 {
-        AddRkX(&block, rkey, i, blen, &mut block2);
+        AddRkX(&block[..], rkey, i, blen, &mut block2[..]);
         sbox_in_place(&mut block2[..blen]);
-        linOp(&block2, &mut block, blen);
+        linOp(&block2[..], &mut block[..], blen);
     }
-    AddRk(&block, rkey, RNDS!(klen) - 1, blen, res);
+    AddRk(&block[..], rkey, RNDS!(klen) - 1, blen, res);
     Ok(())
 }
 
@@ -341,17 +334,25 @@ pub fn encrypt(data: &[u8], rkey: &[u8], klen: usize, blen: usize, res: &mut [u8
 /// (The previous version underflowed a u16 — a panic in debug builds — and
 /// lost the borrow after a logical shift in release builds.)
 pub fn InvAddRk(block: &[u8], rkey: &[u8], nr: usize, blen: usize, res: &mut [u8]) {
+    let start = nr.checked_mul(blen).expect("InvAddRk: round offset overflow");
+    let end = start.checked_add(blen).expect("InvAddRk: round end overflow");
+    assert!(block.len() >= blen, "InvAddRk: input shorter than blen");
+    assert!(res.len() >= blen, "InvAddRk: output shorter than blen");
+    assert!(rkey.len() >= end, "InvAddRk: round key out of bounds");
+
     let mut borrow = 0u16;
     for i in 0..blen {
-        let d = (block[i] as u16)
-            .wrapping_sub(rkey[blen * nr + i] as u16)
-            .wrapping_sub(borrow);
-        res[i] = d as u8;
-        borrow = (d >> 8) & 1;
+        let subtrahend = (rkey[start + i] as u16) + borrow;
+        let minuend = block[i] as u16;
+        res[i] = minuend.wrapping_sub(subtrahend) as u8;
+        borrow = if minuend < subtrahend { 1 } else { 0 };
     }
 }
 
 pub fn InvlinOp(d: &[u8], r: &mut [u8], blocklen: usize) {
+    assert!(matches!(blocklen, 16 | 32 | 64), "InvlinOp: unsupported block length");
+    assert!(d.len() >= blocklen, "InvlinOp: input shorter than blocklen");
+    assert!(r.len() >= blocklen, "InvlinOp: output shorter than blocklen");
     match blocklen {
         16 => {
             let mut dout = [0u32; 4];
@@ -368,17 +369,16 @@ pub fn InvlinOp(d: &[u8], r: &mut [u8], blocklen: usize) {
             ilin388(&load64::<8>(d), &mut dout);
             store64(r, &dout);
         }
-        _ => panic!("Unsupported block length {}", blocklen),
+        _ => unreachable!(),
     }
 }
 
 pub fn InvsBox(data: &[u8], res: &mut [u8], blen: usize) {
-    data.iter()
-        .take(blen)
-        .zip(res.iter_mut().take(blen))
-        .for_each(|(d, r)| {
-            *r = ISB[*d as usize];
-        });
+    assert!(data.len() >= blen, "InvsBox: input shorter than blen");
+    assert!(res.len() >= blen, "InvsBox: output shorter than blen");
+    for i in 0..blen {
+        res[i] = ISB[data[i] as usize];
+    }
 }
 
 /// Decryption (section 9.2). The middle rounds remove the round key with XOR
@@ -387,17 +387,17 @@ pub fn decrypt(data: &[u8], rkey: &[u8], klen: usize, blen: usize, res: &mut [u8
     if !valid_params(klen, blen) || data.len() < blen || res.len() < blen || rkey.len() < RNDS!(klen) * blen {
         return Err(ParamError);
     }
-    let mut block = [0u8; MAXBLOCKLEN as usize];
-    let mut block2 = [0u8; MAXBLOCKLEN as usize];
-    InvAddRk(data, rkey, RNDS!(klen) - 1, blen, &mut block);
+    let mut block = Zeroizing::new([0u8; MAXBLOCKLEN as usize]);
+    let mut block2 = Zeroizing::new([0u8; MAXBLOCKLEN as usize]);
+    InvAddRk(data, rkey, RNDS!(klen) - 1, blen, &mut block[..]);
     for i in (1..RNDS!(klen) - 1).rev() {
-        InvlinOp(&block, &mut block2, blen);
+        InvlinOp(&block[..], &mut block2[..], blen);
         inv_sbox_in_place(&mut block2[..blen]);
-        AddRkX(&block2, rkey, i, blen, &mut block);
+        AddRkX(&block2[..], rkey, i, blen, &mut block[..]);
     }
-    InvlinOp(&block, &mut block2, blen);
+    InvlinOp(&block[..], &mut block2[..], blen);
     inv_sbox_in_place(&mut block2[..blen]);
-    InvAddRk(&block2, rkey, 0, blen, res);
+    InvAddRk(&block2[..], rkey, 0, blen, res);
     Ok(())
 }
 
@@ -405,7 +405,7 @@ pub fn decrypt(data: &[u8], rkey: &[u8], klen: usize, blen: usize, res: &mut [u8
 pub struct Cipher {
     klen: usize,
     blen: usize,
-    rkey: Vec<u8>,
+    rkey: Zeroizing<Vec<u8>>,
 }
 
 impl Cipher {
@@ -414,7 +414,7 @@ impl Cipher {
         if !valid_params(key.len(), block_size) {
             return Err(ParamError);
         }
-        let mut rkey = vec![0u8; RNDS!(key.len()) * block_size];
+        let mut rkey = Zeroizing::new(vec![0u8; RNDS!(key.len()) * block_size]);
         Kexp(key, key.len(), block_size, &mut rkey)?;
         Ok(Cipher { klen: key.len(), blen: block_size, rkey })
     }
@@ -440,24 +440,17 @@ impl Cipher {
 
     /// Encrypts one block in place.
     pub fn encrypt_in_place(&self, block: &mut [u8]) {
-        let mut tmp = [0u8; MAXBLOCKLEN as usize];
+        let mut tmp = Zeroizing::new([0u8; MAXBLOCKLEN as usize]);
         tmp[..self.blen].copy_from_slice(&block[..self.blen]);
         self.encrypt_block(&tmp[..self.blen], block);
     }
 
     /// Decrypts one block in place.
     pub fn decrypt_in_place(&self, block: &mut [u8]) {
-        let mut tmp = [0u8; MAXBLOCKLEN as usize];
+        let mut tmp = Zeroizing::new([0u8; MAXBLOCKLEN as usize]);
         tmp[..self.blen].copy_from_slice(&block[..self.blen]);
         self.decrypt_block(&tmp[..self.blen], block);
     }
 }
 
-impl Drop for Cipher {
-    fn drop(&mut self) {
-        for b in self.rkey.iter_mut() {
-            // volatile so the wipe is not optimised away
-            unsafe { std::ptr::write_volatile(b, 0) };
-        }
-    }
-}
+// Cipher.rkey is Zeroizing<Vec<u8>> and is wiped on Drop (including unwinding).

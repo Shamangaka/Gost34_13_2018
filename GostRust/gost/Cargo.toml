@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+zeroize = "=1.8.2"
 num-traits = "0.2"
 anyhow = "1.0"
 cty = "0.2"
