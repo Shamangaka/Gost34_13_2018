@@ -1,6 +1,12 @@
 ﻿module Qalqan
 
+open System
+open System.Buffers.Binary
+open System.Numerics
 open Microsoft.FSharp.NativeInterop
+
+// S (Table 1) and S^-1 (Table 3) with the correct values; the printed tables
+// misprint three cells each ("de", "ce", "1e" for dc, cc, 1c).
 
 let sb : byte[] = 
     [| (* ded: OK, dif: 4, dip: 7, lin: 32, pow: 7, cor: 0, dst: 112, sac: 116..140, cyc: 256 *)
@@ -60,13 +66,18 @@ let KEYLENSTEP = 16
 
 let RNDS x = 
     16 + (x - 32) / 16
-let ROTL (x, s) = 
-    (x <<< s) ||| (x >>> (32 - s))
-let ROTL64 (x: uint64, s) = 
-    (x <<< s) ||| (x >>> (64 - s))
 
-#nowarn 9
+// BitOperations.RotateLeft is defined for every count, including the 0 of Table 2.
+let ROTL (x: uint32, s: int) = BitOperations.RotateLeft(x, s)
+let ROTL64 (x: uint64, s: int) = BitOperations.RotateLeft(x, s)
+
+/// Key length 32..128 bytes in steps of 16, block length 16, 32 or 64 bytes (section 5).
+let ValidParams (klen: int, blen: int) =
+    klen >= MINKEYLEN && klen <= MAXKEYLEN && klen % KEYLENSTEP = 0 && (blen = 16 || blen = 32 || blen = 64)
+
+#nowarn "9"
 let Kexp(key: nativeptr<byte>, klen: int, blen: int, rkey: nativeptr<byte>) =
+    if not (ValidParams(klen, blen)) then false else
     let r0 = NativePtr.stackalloc<byte> 17
     let r1 = NativePtr.stackalloc<byte> 15
     let addk = klen - 32
@@ -100,7 +111,9 @@ let Kexp(key: nativeptr<byte>, klen: int, blen: int, rkey: nativeptr<byte>) =
             NativePtr.set r0 16 t0
             NativePtr.set r1 14 t1
         s <- 0
-    ()
+    for i = 0 to 16 do NativePtr.set r0 i 0uy
+    for i = 0 to 14 do NativePtr.set r1 i 0uy
+    true
 
 let lin344 (din: nativeptr<uint>, dout: nativeptr<uint>) =
     NativePtr.set dout 0 ((NativePtr.get din 0) ^^^ ROTL((NativePtr.get din 1), c0[0]) ^^^ ROTL((NativePtr.get din 2), c0[1]) ^^^ ROTL((NativePtr.get din 3), c0[2]))
@@ -128,52 +141,6 @@ let lin388 (din: nativeptr<uint64>, dout: nativeptr<uint64>) =
     NativePtr.set dout 6 ((NativePtr.get din 6) ^^^ ROTL64((NativePtr.get din 7), c2[0]) ^^^ ROTL64((NativePtr.get dout 0), c2[1]) ^^^ ROTL64((NativePtr.get dout 1), c2[2]) ^^^ ROTL64((NativePtr.get dout 2), c2[3]) ^^^ ROTL64((NativePtr.get dout 3), c2[4]) ^^^ ROTL64((NativePtr.get dout 4), c2[5]) ^^^ ROTL64((NativePtr.get dout 5), c2[6]))
     NativePtr.set dout 7 ((NativePtr.get din 7) ^^^ ROTL64((NativePtr.get dout 0), c2[0]) ^^^ ROTL64((NativePtr.get dout 1), c2[1]) ^^^ ROTL64((NativePtr.get dout 2), c2[2]) ^^^ ROTL64((NativePtr.get dout 3), c2[3]) ^^^ ROTL64((NativePtr.get dout 4), c2[4]) ^^^ ROTL64((NativePtr.get dout 5), c2[5]) ^^^ ROTL64((NativePtr.get dout 6), c2[6]))
 
-let linOp (d: nativeptr<byte>, r: nativeptr<byte>, blocklen: int) =
-    match blocklen with
-    | 16 -> lin344(d |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr, r |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr)
-    | 32 -> lin384(d |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr, r |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr)
-    | 64 -> lin388(d |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr, r |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr)
-    | _ -> assert false
-
-let sBox (data: nativeptr<byte>, res: nativeptr<byte>,  blen: int)=
-    for i = 0 to blen - 1 do
-        NativePtr.set res i sb[int (NativePtr.get data i)]
-
-let AddRkX(block: nativeptr<byte>, rkey: nativeptr<byte>, nr, blen, res: nativeptr<byte>)=
-    for i = 0 to blen - 1 do
-        NativePtr.set res i ((NativePtr.get block i) ^^^ (NativePtr.get rkey (nr * blen + i)))
-
-let AddRk(block: nativeptr<byte>, rkey: nativeptr<byte>, nr, blen, res: nativeptr<byte>)=
-    let mutable tmp = (uint16 (NativePtr.get block 0) + uint16 (NativePtr.get rkey (nr * blen)))
-    NativePtr.set res 0 (byte tmp)
-    tmp <- tmp >>> 8
-    for i = 1 to blen - 1 do
-        tmp <- tmp + (uint16 (NativePtr.get block i) + uint16 (NativePtr.get rkey (nr * blen + i)))
-        NativePtr.set res i (byte tmp)
-        tmp <- tmp >>> 8
-
-let encrypt(data: nativeptr<byte>, rkey: nativeptr<byte>, klen, blen, res: nativeptr<byte>) =
-    let block = NativePtr.stackalloc<byte> MAXBLOCKLEN
-    let block2 = NativePtr.stackalloc<byte> MAXBLOCKLEN
-    AddRk(data, rkey, 0, blen, block)
-    sBox(block, block2, blen)
-    linOp(block2, block, blen)
-    for i = 1 to blen - 2 do
-        AddRkX(block, rkey, i, blen, block2)
-        sBox(block2, block2, blen)
-        linOp(block2, block, blen)
-
-    AddRk(block, rkey, RNDS(klen) - 1, blen, res)
-
-let InvAddRk(block: nativeptr<byte>, rkey: nativeptr<byte>, nr, blen, res: nativeptr<byte>)=
-    let mutable tmp = (uint16 (NativePtr.get block 0) - uint16 (NativePtr.get rkey (nr * blen)))
-    NativePtr.set res 0 (byte tmp)
-    tmp <- tmp >>> 8
-    for i = 1 to blen - 1 do
-        tmp <- tmp + (uint16 (NativePtr.get block i) - uint16 (NativePtr.get rkey (nr * blen + i)))
-        NativePtr.set res i (byte tmp)
-        tmp <- tmp >>> 8
-
 let ilin344 (din: nativeptr<uint>, dout: nativeptr<uint>) =
     NativePtr.set dout 3 ((NativePtr.get din 3) ^^^ ROTL((NativePtr.get din 0), c0[0]) ^^^ ROTL((NativePtr.get din 1), c0[1]) ^^^ ROTL((NativePtr.get din 2), c0[2]))
     NativePtr.set dout 2 ((NativePtr.get din 2) ^^^ ROTL((NativePtr.get dout 3), c0[0]) ^^^ ROTL((NativePtr.get din 0), c0[1]) ^^^ ROTL((NativePtr.get din 1), c0[2]))
@@ -190,36 +157,106 @@ let ilin384 (din: nativeptr<uint>, dout: nativeptr<uint>) =
     NativePtr.set dout 1 ((NativePtr.get din 1) ^^^ ROTL((NativePtr.get dout 2), c1[0]) ^^^ ROTL((NativePtr.get dout 3), c1[1]) ^^^ ROTL((NativePtr.get dout 4), c1[2]) ^^^ ROTL((NativePtr.get dout 5), c1[3]) ^^^ ROTL((NativePtr.get dout 6), c1[4]) ^^^ ROTL((NativePtr.get dout 7), c1[5]) ^^^ ROTL((NativePtr.get din 0), c1[6]))
     NativePtr.set dout 0 ((NativePtr.get din 0) ^^^ ROTL((NativePtr.get dout 1), c1[0]) ^^^ ROTL((NativePtr.get dout 2), c1[1]) ^^^ ROTL((NativePtr.get dout 3), c1[2]) ^^^ ROTL((NativePtr.get dout 4), c1[3]) ^^^ ROTL((NativePtr.get dout 5), c1[4]) ^^^ ROTL((NativePtr.get dout 6), c1[5]) ^^^ ROTL((NativePtr.get dout 7), c1[6]))
 
+// 512-bit L^-1: the previous version used the 256-bit shift constants c1
+// here, so 512-bit decryption never worked.
 let ilin388 (din: nativeptr<uint64>, dout: nativeptr<uint64>) =
-    NativePtr.set dout 7 ((NativePtr.get din 7) ^^^ ROTL64((NativePtr.get din 0), c1[0]) ^^^ ROTL64((NativePtr.get din 1), c1[1]) ^^^ ROTL64((NativePtr.get din 2), c1[2]) ^^^ ROTL64((NativePtr.get din 3), c1[3]) ^^^ ROTL64((NativePtr.get din 4), c1[4]) ^^^ ROTL64((NativePtr.get din 5), c1[5]) ^^^ ROTL64((NativePtr.get din 6), c1[6]))
-    NativePtr.set dout 6 ((NativePtr.get din 6) ^^^ ROTL64((NativePtr.get dout 7), c1[0]) ^^^ ROTL64((NativePtr.get din 0), c1[1]) ^^^ ROTL64((NativePtr.get din 1), c1[2]) ^^^ ROTL64((NativePtr.get din 2), c1[3]) ^^^ ROTL64((NativePtr.get din 3), c1[4]) ^^^ ROTL64((NativePtr.get din 4), c1[5]) ^^^ ROTL64((NativePtr.get din 5), c1[6]))
-    NativePtr.set dout 5 ((NativePtr.get din 5) ^^^ ROTL64((NativePtr.get dout 6), c1[0]) ^^^ ROTL64((NativePtr.get dout 7), c1[1]) ^^^ ROTL64((NativePtr.get din 0), c1[2]) ^^^ ROTL64((NativePtr.get din 1), c1[3]) ^^^ ROTL64((NativePtr.get din 2), c1[4]) ^^^ ROTL64((NativePtr.get din 3), c1[5]) ^^^ ROTL64((NativePtr.get din 4), c1[6]))
-    NativePtr.set dout 4 ((NativePtr.get din 4) ^^^ ROTL64((NativePtr.get dout 5), c1[0]) ^^^ ROTL64((NativePtr.get dout 6), c1[1]) ^^^ ROTL64((NativePtr.get dout 7), c1[2]) ^^^ ROTL64((NativePtr.get din 0), c1[3]) ^^^ ROTL64((NativePtr.get din 1), c1[4]) ^^^ ROTL64((NativePtr.get din 2), c1[5]) ^^^ ROTL64((NativePtr.get din 3), c1[6]))
-    NativePtr.set dout 3 ((NativePtr.get din 3) ^^^ ROTL64((NativePtr.get dout 4), c1[0]) ^^^ ROTL64((NativePtr.get dout 5), c1[1]) ^^^ ROTL64((NativePtr.get dout 6), c1[2]) ^^^ ROTL64((NativePtr.get dout 7), c1[3]) ^^^ ROTL64((NativePtr.get din 0), c1[4]) ^^^ ROTL64((NativePtr.get din 1), c1[5]) ^^^ ROTL64((NativePtr.get din 2), c1[6]))
-    NativePtr.set dout 2 ((NativePtr.get din 2) ^^^ ROTL64((NativePtr.get dout 3), c1[0]) ^^^ ROTL64((NativePtr.get dout 4), c1[1]) ^^^ ROTL64((NativePtr.get dout 5), c1[2]) ^^^ ROTL64((NativePtr.get dout 6), c1[3]) ^^^ ROTL64((NativePtr.get dout 7), c1[4]) ^^^ ROTL64((NativePtr.get din 0), c1[5]) ^^^ ROTL64((NativePtr.get din 1), c1[6]))
-    NativePtr.set dout 1 ((NativePtr.get din 1) ^^^ ROTL64((NativePtr.get dout 2), c1[0]) ^^^ ROTL64((NativePtr.get dout 3), c1[1]) ^^^ ROTL64((NativePtr.get dout 4), c1[2]) ^^^ ROTL64((NativePtr.get dout 5), c1[3]) ^^^ ROTL64((NativePtr.get dout 6), c1[4]) ^^^ ROTL64((NativePtr.get dout 7), c1[5]) ^^^ ROTL64((NativePtr.get din 0), c1[6]))
-    NativePtr.set dout 0 ((NativePtr.get din 0) ^^^ ROTL64((NativePtr.get dout 1), c1[0]) ^^^ ROTL64((NativePtr.get dout 2), c1[1]) ^^^ ROTL64((NativePtr.get dout 3), c1[2]) ^^^ ROTL64((NativePtr.get dout 4), c1[3]) ^^^ ROTL64((NativePtr.get dout 5), c1[4]) ^^^ ROTL64((NativePtr.get dout 6), c1[5]) ^^^ ROTL64((NativePtr.get dout 7), c1[6]))
+    NativePtr.set dout 7 ((NativePtr.get din 7) ^^^ ROTL64((NativePtr.get din 0), c2[0]) ^^^ ROTL64((NativePtr.get din 1), c2[1]) ^^^ ROTL64((NativePtr.get din 2), c2[2]) ^^^ ROTL64((NativePtr.get din 3), c2[3]) ^^^ ROTL64((NativePtr.get din 4), c2[4]) ^^^ ROTL64((NativePtr.get din 5), c2[5]) ^^^ ROTL64((NativePtr.get din 6), c2[6]))
+    NativePtr.set dout 6 ((NativePtr.get din 6) ^^^ ROTL64((NativePtr.get dout 7), c2[0]) ^^^ ROTL64((NativePtr.get din 0), c2[1]) ^^^ ROTL64((NativePtr.get din 1), c2[2]) ^^^ ROTL64((NativePtr.get din 2), c2[3]) ^^^ ROTL64((NativePtr.get din 3), c2[4]) ^^^ ROTL64((NativePtr.get din 4), c2[5]) ^^^ ROTL64((NativePtr.get din 5), c2[6]))
+    NativePtr.set dout 5 ((NativePtr.get din 5) ^^^ ROTL64((NativePtr.get dout 6), c2[0]) ^^^ ROTL64((NativePtr.get dout 7), c2[1]) ^^^ ROTL64((NativePtr.get din 0), c2[2]) ^^^ ROTL64((NativePtr.get din 1), c2[3]) ^^^ ROTL64((NativePtr.get din 2), c2[4]) ^^^ ROTL64((NativePtr.get din 3), c2[5]) ^^^ ROTL64((NativePtr.get din 4), c2[6]))
+    NativePtr.set dout 4 ((NativePtr.get din 4) ^^^ ROTL64((NativePtr.get dout 5), c2[0]) ^^^ ROTL64((NativePtr.get dout 6), c2[1]) ^^^ ROTL64((NativePtr.get dout 7), c2[2]) ^^^ ROTL64((NativePtr.get din 0), c2[3]) ^^^ ROTL64((NativePtr.get din 1), c2[4]) ^^^ ROTL64((NativePtr.get din 2), c2[5]) ^^^ ROTL64((NativePtr.get din 3), c2[6]))
+    NativePtr.set dout 3 ((NativePtr.get din 3) ^^^ ROTL64((NativePtr.get dout 4), c2[0]) ^^^ ROTL64((NativePtr.get dout 5), c2[1]) ^^^ ROTL64((NativePtr.get dout 6), c2[2]) ^^^ ROTL64((NativePtr.get dout 7), c2[3]) ^^^ ROTL64((NativePtr.get din 0), c2[4]) ^^^ ROTL64((NativePtr.get din 1), c2[5]) ^^^ ROTL64((NativePtr.get din 2), c2[6]))
+    NativePtr.set dout 2 ((NativePtr.get din 2) ^^^ ROTL64((NativePtr.get dout 3), c2[0]) ^^^ ROTL64((NativePtr.get dout 4), c2[1]) ^^^ ROTL64((NativePtr.get dout 5), c2[2]) ^^^ ROTL64((NativePtr.get dout 6), c2[3]) ^^^ ROTL64((NativePtr.get dout 7), c2[4]) ^^^ ROTL64((NativePtr.get din 0), c2[5]) ^^^ ROTL64((NativePtr.get din 1), c2[6]))
+    NativePtr.set dout 1 ((NativePtr.get din 1) ^^^ ROTL64((NativePtr.get dout 2), c2[0]) ^^^ ROTL64((NativePtr.get dout 3), c2[1]) ^^^ ROTL64((NativePtr.get dout 4), c2[2]) ^^^ ROTL64((NativePtr.get dout 5), c2[3]) ^^^ ROTL64((NativePtr.get dout 6), c2[4]) ^^^ ROTL64((NativePtr.get dout 7), c2[5]) ^^^ ROTL64((NativePtr.get din 0), c2[6]))
+    NativePtr.set dout 0 ((NativePtr.get din 0) ^^^ ROTL64((NativePtr.get dout 1), c2[0]) ^^^ ROTL64((NativePtr.get dout 2), c2[1]) ^^^ ROTL64((NativePtr.get dout 3), c2[2]) ^^^ ROTL64((NativePtr.get dout 4), c2[3]) ^^^ ROTL64((NativePtr.get dout 5), c2[4]) ^^^ ROTL64((NativePtr.get dout 6), c2[5]) ^^^ ROTL64((NativePtr.get dout 7), c2[6]))
 
-let InvlinOp (d: nativeptr<byte>, r: nativeptr<byte>, blocklen: int) =
+// Words are little-endian whatever the host byte order (Appendix A); the
+// previous code reinterpreted the byte buffers as uint*/uint64*.
+let private applyLinear (d: nativeptr<byte>, r: nativeptr<byte>, blocklen: int, inverse: bool) =
     match blocklen with
-    | 16 -> ilin344(d |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr, r |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr)
-    | 32 -> ilin384(d |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr, r |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr)
-    | 64 -> ilin388(d |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr, r |> NativePtr.toVoidPtr |> NativePtr.ofVoidPtr)
-    | _ -> assert false
+    | 16 | 32 ->
+        let n = blocklen / 4
+        let din = NativePtr.stackalloc<uint32> 8
+        let dout = NativePtr.stackalloc<uint32> 8
+        for i = 0 to n - 1 do
+            NativePtr.set din i (BinaryPrimitives.ReadUInt32LittleEndian(ReadOnlySpan<byte>(NativePtr.toVoidPtr (NativePtr.add d (4 * i)), 4)))
+        match blocklen, inverse with
+        | 16, false -> lin344(din, dout)
+        | 16, true -> ilin344(din, dout)
+        | _, false -> lin384(din, dout)
+        | _, true -> ilin384(din, dout)
+        for i = 0 to n - 1 do
+            BinaryPrimitives.WriteUInt32LittleEndian(Span<byte>(NativePtr.toVoidPtr (NativePtr.add r (4 * i)), 4), NativePtr.get dout i)
+    | 64 ->
+        let din = NativePtr.stackalloc<uint64> 8
+        let dout = NativePtr.stackalloc<uint64> 8
+        for i = 0 to 7 do
+            NativePtr.set din i (BinaryPrimitives.ReadUInt64LittleEndian(ReadOnlySpan<byte>(NativePtr.toVoidPtr (NativePtr.add d (8 * i)), 8)))
+        if inverse then ilin388(din, dout) else lin388(din, dout)
+        for i = 0 to 7 do
+            BinaryPrimitives.WriteUInt64LittleEndian(Span<byte>(NativePtr.toVoidPtr (NativePtr.add r (8 * i)), 8), NativePtr.get dout i)
+    | _ -> invalidArg "blocklen" "block length must be 16, 32 or 64 bytes"
+
+let linOp (d: nativeptr<byte>, r: nativeptr<byte>, blocklen: int) = applyLinear(d, r, blocklen, false)
+
+let InvlinOp (d: nativeptr<byte>, r: nativeptr<byte>, blocklen: int) = applyLinear(d, r, blocklen, true)
+
+let sBox (data: nativeptr<byte>, res: nativeptr<byte>,  blen: int)=
+    for i = 0 to blen - 1 do
+        NativePtr.set res i sb[int (NativePtr.get data i)]
 
 let InvsBox (data: nativeptr<byte>, res: nativeptr<byte>,  blen: int)=
     for i = 0 to blen - 1 do
         NativePtr.set res i isb[int (NativePtr.get data i)]
 
+let AddRkX(block: nativeptr<byte>, rkey: nativeptr<byte>, nr, blen, res: nativeptr<byte>)=
+    for i = 0 to blen - 1 do
+        NativePtr.set res i ((NativePtr.get block i) ^^^ (NativePtr.get rkey (nr * blen + i)))
+
+let AddRk(block: nativeptr<byte>, rkey: nativeptr<byte>, nr, blen, res: nativeptr<byte>)=
+    let mutable tmp = (uint16 (NativePtr.get block 0) + uint16 (NativePtr.get rkey (nr * blen)))
+    NativePtr.set res 0 (byte tmp)
+    tmp <- tmp >>> 8
+    for i = 1 to blen - 1 do
+        tmp <- tmp + (uint16 (NativePtr.get block i) + uint16 (NativePtr.get rkey (nr * blen + i)))
+        NativePtr.set res i (byte tmp)
+        tmp <- tmp >>> 8
+
+/// Subtraction modulo 2^(8*blen), byte 0 least significant. (The previous
+/// version kept the borrow as 0x00FF after a logical shift of a uint16.)
+let InvAddRk(block: nativeptr<byte>, rkey: nativeptr<byte>, nr, blen, res: nativeptr<byte>)=
+    let mutable borrow = 0
+    for i = 0 to blen - 1 do
+        let d = int (NativePtr.get block i) - int (NativePtr.get rkey (nr * blen + i)) - borrow
+        NativePtr.set res i (byte (d &&& 0xff))
+        borrow <- if d < 0 then 1 else 0
+
+/// Encryption (section 9.1) with N = RNDS(klen) round keys. (The previous
+/// loop ran to blen - 2 instead of RNDS(klen) - 2.)
+let encrypt(data: nativeptr<byte>, rkey: nativeptr<byte>, klen, blen, res: nativeptr<byte>) =
+    if not (ValidParams(klen, blen)) then false else
+    let block = NativePtr.stackalloc<byte> MAXBLOCKLEN
+    let block2 = NativePtr.stackalloc<byte> MAXBLOCKLEN
+    AddRk(data, rkey, 0, blen, block)
+    sBox(block, block2, blen)
+    linOp(block2, block, blen)
+    for i = 1 to RNDS(klen) - 2 do
+        AddRkX(block, rkey, i, blen, block2)
+        sBox(block2, block2, blen)
+        linOp(block2, block, blen)
+    AddRk(block, rkey, RNDS(klen) - 1, blen, res)
+    true
+
+/// Decryption (section 9.2).
 let decrypt(data: nativeptr<byte>, rkey: nativeptr<byte>, klen, blen, res: nativeptr<byte>) =
+    if not (ValidParams(klen, blen)) then false else
     let block = NativePtr.stackalloc<byte> MAXBLOCKLEN
     let block2 = NativePtr.stackalloc<byte> MAXBLOCKLEN
     InvAddRk(data, rkey, RNDS(klen) - 1, blen, block)
-    for i = blen - 2 downto 1 do
+    for i = RNDS(klen) - 2 downto 1 do
         InvlinOp(block, block2, blen)
         InvsBox(block2, block2, blen)
         AddRkX(block2, rkey, i, blen, block)
-        
     InvlinOp(block, block2, blen)
     InvsBox(block2, block2, blen)
     InvAddRk(block2, rkey, 0, blen, res)
+    true

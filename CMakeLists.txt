@@ -1,108 +1,56 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 project(gost_project LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 ###############################################################################
-## file globbing ##############################################################
+## library and test-vector generator ##########################################
 ###############################################################################
 
-# these instructions search the directory tree when CMake is
-# invoked and put all files that match the pattern in the variables
-# `sources` and `data`
-file(GLOB_RECURSE sources      src/main/*.cpp src/main/*.h)
-file(GLOB_RECURSE sources_test src/test/*.cpp)
-file(GLOB_RECURSE data resources/*)
-# you can use set(sources src/main.cpp) etc if you don't want to
-# use globbing to find files automatically
-
-###############################################################################
-## target definitions #########################################################
-###############################################################################
-
-# add the data to the target, so it becomes visible in some IDE
-add_executable(gost_test ${sources} ${data})
-
-# just for example add some compiler flags
-#target_compile_options(gost_test PUBLIC -std=c++1y -Wall -Wfloat-conversion)
-target_compile_options(gost_test 
-  PUBLIC 
-  $<IF:$<CXX_COMPILER_ID:MSVC>,/Wall,>
-  $<IF:$<CXX_COMPILER_ID:GNU>,-Wall -Wfloat-conversion,>
+add_library(qalqan STATIC
+  src/main/Qalqan.cpp
+  src/main/Modes.cpp
+  src/main/PRNG.cpp
+  src/main/TestVectors.cpp
+)
+target_include_directories(qalqan PUBLIC src/main)
+target_compile_options(qalqan PRIVATE
+  $<$<CXX_COMPILER_ID:MSVC>:/W4>
+  $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra>
 )
 
-# this lets me include files relative to the root source directory with a <> pair
-target_include_directories(gost_test PUBLIC src/main)
-
-# this copies all resource files in the build directory
-# we need this, because we want to work with paths relative to the executable
-file(COPY ${data} DESTINATION resources)
-
-###############################################################################
-## dependencies ###############################################################
-###############################################################################
-
-# this defines the variables Boost_LIBRARIES that contain all library names
-# that we need to link to
-# find_package(Boost 1.36.0 COMPONENTS filesystem system REQUIRED)
-# 
-# target_link_libraries(example PUBLIC
-#   ${Boost_LIBRARIES}
-#   # here you can add any library dependencies
-# )
+# gost_test writes the Appendix A vectors for resources/input.bin to
+# resources/output.txt (run it from the build directory).
+add_executable(gost_test src/main/Gost.cpp)
+target_link_libraries(gost_test PRIVATE qalqan)
+file(COPY resources DESTINATION ${CMAKE_BINARY_DIR})
 
 ###############################################################################
 ## testing ####################################################################
 ###############################################################################
 
-# this is for our testing framework
-# we don't add REQUIRED because it's just for testing
+enable_testing()
 find_package(GTest)
-
-if(GTEST_FOUND)
-  add_executable(unit_tests ${sources_test} ${sources})
-
-  # we add this define to prevent collision with the main
-  # this might be better solved by not adding the source with the main to the
-  # testing target
-  target_compile_definitions(unit_tests PUBLIC UNIT_TESTS)
-
-  # this allows us to use our executable as a link library
-  # therefore we can inherit all compiler options and library dependencies
-  set_target_properties(gost_test PROPERTIES ENABLE_EXPORTS on)
-
-  target_link_libraries(unit_tests PUBLIC
-    ${GTEST_BOTH_LIBRARIES}
-    gost_test
-  )
-
-  target_include_directories(unit_tests PUBLIC
-    ${GTEST_INCLUDE_DIRS} # doesn't do anything on Linux
-  )
+if(GTest_FOUND)
+  file(GLOB test_sources src/test/*.cpp)
+  add_executable(unit_tests ${test_sources})
+  target_link_libraries(unit_tests PRIVATE qalqan GTest::gtest_main)
+  target_compile_definitions(unit_tests PRIVATE QALQAN_RESOURCES="${CMAKE_SOURCE_DIR}/resources")
+  include(GoogleTest)
+  gtest_discover_tests(unit_tests)
+else()
+  message(STATUS "GTest not found: unit_tests target disabled")
 endif()
 
 ###############################################################################
 ## packaging ##################################################################
 ###############################################################################
 
-# all install commands get the same destination. this allows us to use paths
-# relative to the executable.
 install(TARGETS gost_test DESTINATION example_destination)
-# this is basically a repeat of the file copy instruction that copies the
-# resources in the build directory, but here we tell CMake that we want it
-# in the package
 install(DIRECTORY resources DESTINATION example_destination)
 
-# now comes everything we need, to create a package
-# there are a lot more variables you can set, and some
-# you need to set for some package types, but we want to
-# be minimal here
 set(CPACK_PACKAGE_NAME "gost_test")
 set(CPACK_PACKAGE_VERSION "0.0.1")
-
-# we don't want to split our program up into several things
 set(CPACK_MONOLITHIC_INSTALL 1)
-
-# This must be last
 include(CPack)

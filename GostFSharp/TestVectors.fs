@@ -5,7 +5,7 @@ open PRNG
 open System.IO
 open Microsoft.FSharp.NativeInterop
 
-#nowarn 9
+#nowarn "9"
 let Pr3(b: nativeptr<byte>, len, f: StreamWriter) =
     for i = 0 to len - 1 do
         f.Write("{0:x2}", NativePtr.get b i);
@@ -158,9 +158,9 @@ let encryptV(data: nativeptr<byte>, rkey: nativeptr<byte>, klen, blen, res: nati
     AddRk(block, rkey, RNDS(klen) - 1, blen, res)
     Pr("Ciphertext", res, blen, f)
 
-let fread_s(din: nativeptr<byte>, bufferSize, size, count, src: FileStream) =
-    for i = 0 to count - 1 do
-        NativePtr.set din i (byte (src.ReadByte()))
+// Reads exactly count bytes (the previous version stored -1 as 0xff past end of file).
+let fread_s(din: nativeptr<byte>, bufferSize: int, size: int, count: int, src: FileStream) =
+    src.ReadExactly(System.Span<byte>(NativePtr.toVoidPtr din, count))
     
 [<Literal>]
 let BLEN_CNT = 3
@@ -238,15 +238,18 @@ let ShortTestBasicEnc (f: StreamWriter, src: FileStream) =
         fread_s(key, MAXKEYLEN, sizeof<byte>, MAXKEYLEN, src)
     
     f.Write("Encryption of 128 bit block and 256 bit key\n")
-    Kexp(key, MINKEYLEN, MINBLOCKLEN, rkey)
+    if not (Kexp(key, MINKEYLEN, MINBLOCKLEN, rkey)) then failwith "invalid key or block length"
     encryptV(data, rkey, MINKEYLEN, MINBLOCKLEN, cipher, f)
     f.Write("\n")
 
 let ShortTestEnc (f: StreamWriter, src: FileStream) =
     let key = NativePtr.stackalloc<byte> MAXKEYLEN
     let rkey = NativePtr.stackalloc<byte> (RNDS(MAXKEYLEN) * MAXBLOCKLEN)
-    let data = NativePtr.stackalloc<byte> MINBLOCKLEN
-    let cipher = NativePtr.stackalloc<byte> MINBLOCKLEN
+    // A full block is read here (the previous 16-byte buffer received 64 bytes,
+    // overflowing the stack and crashing the generator).
+    let data = NativePtr.stackalloc<byte> MAXBLOCKLEN
+    let data2 = NativePtr.stackalloc<byte> MAXBLOCKLEN
+    let cipher2 = NativePtr.stackalloc<byte> MAXBLOCKLEN
     if (src = null) then
         for i = 0 to MAXBLOCKLEN - 1 do
             NativePtr.set data i (rnext())
@@ -265,9 +268,10 @@ let ShortTestEnc (f: StreamWriter, src: FileStream) =
 
     let blen_vals = [| 16; 32; 64 |]
     for blen in blen_vals do
-        let data2 = NativePtr.stackalloc<byte> MAXBLOCKLEN
-        let cipher2 = NativePtr.stackalloc<byte> MAXBLOCKLEN
-        Kexp(key, MINKEYLEN, blen, rkey)
+        for i = 0 to MAXBLOCKLEN - 1 do // the vectors encrypt an all-zero block
+            NativePtr.set data2 i 0uy
+            NativePtr.set cipher2 i 0uy
+        if not (Kexp(key, MINKEYLEN, blen, rkey)) then failwith "invalid key or block length"
         f.Write("\n***** Encryption, key length = {0}, block len = {1} *****\n", MINKEYLEN * 8, blen * 8)
         encryptV(data2, rkey, MINKEYLEN, blen, cipher2, f)
         f.Write("\n")

@@ -5,6 +5,13 @@ import (
 	"io"
 )
 
+// mustRead fills buf from the input file; the generator cannot continue on a short read.
+func mustRead(src io.Reader, buf []uint8) {
+	if _, err := io.ReadFull(src, buf); err != nil {
+		panic("qalqan: input file too short: " + err.Error())
+	}
+}
+
 func Pr3(b []uint8, len int, f io.Writer) {
 	for i := 0; i < len; i++ {
 		fmt.Fprintf(f, "%02x", b[i])
@@ -196,7 +203,7 @@ func ShortTestLin(f io.Writer, src io.Reader) {
 			din[i] = rnext()
 		}
 	} else {
-		io.ReadAtLeast(src, din, MAXBLOCKLEN)
+		mustRead(src, din[:MAXBLOCKLEN])
 	}
 
 	var blen_vals = [BLEN_CNT]int{16, 32, 64}
@@ -225,7 +232,7 @@ func ShortTestSBox(f io.Writer, src io.Reader) {
 			dout[i] = sb[din[i]]
 		}
 	} else {
-		io.ReadAtLeast(src, din, MAXBLOCKLEN)
+		mustRead(src, din[:MAXBLOCKLEN])
 		for i := 0; i < MAXBLOCKLEN; i++ {
 			dout[i] = sb[din[i]]
 		}
@@ -250,7 +257,7 @@ func ShortTestKExp(f io.Writer, src io.Reader) {
 			key[i] = rnext()
 		}
 	} else {
-		io.ReadAtLeast(src, key, MAXKEYLEN)
+		mustRead(src, key[:MAXKEYLEN])
 	}
 
 	fmt.Fprintf(f, "\nKey expansion for %d bit key and %d bit block:\n", MAXKEYLEN*8, MAXBLOCKLEN*8)
@@ -261,8 +268,8 @@ func ShortTestKExp(f io.Writer, src io.Reader) {
 func ShortTestBasicEnc(f io.Writer, src io.Reader) {
 	var key []uint8 = make([]uint8, MINKEYLEN)
 	var rkey []uint8 = make([]uint8, RNDS(MINKEYLEN)*MINBLOCKLEN)
-	var data []uint8 = make([]uint8, MINKEYLEN)
-	var cipher []uint8 = make([]uint8, MINKEYLEN)
+	var data []uint8 = make([]uint8, MINBLOCKLEN)
+	var cipher []uint8 = make([]uint8, MINBLOCKLEN)
 	if src == nil {
 		for i := 0; i < MINBLOCKLEN; i++ {
 			data[i] = rnext()
@@ -271,8 +278,8 @@ func ShortTestBasicEnc(f io.Writer, src io.Reader) {
 			key[i] = rnext()
 		}
 	} else {
-		io.ReadAtLeast(src, data, MINKEYLEN)
-		io.ReadAtLeast(src, key, MINKEYLEN)
+		mustRead(src, data[:MINBLOCKLEN])
+		mustRead(src, key[:MINKEYLEN])
 	}
 
 	fmt.Fprintf(f, "Encryption of 128 bit block and 256 bit key\n")
@@ -295,8 +302,8 @@ func ShortTestEnc(f io.Writer, src io.Reader) {
 			key[i] = rnext()
 		}
 	} else {
-		io.ReadAtLeast(src, data, MAXBLOCKLEN)
-		io.ReadAtLeast(src, key, MAXKEYLEN)
+		mustRead(src, data[:MAXBLOCKLEN])
+		mustRead(src, key[:MAXKEYLEN])
 	}
 
 	for klen := MINKEYLEN; klen <= MAXKEYLEN; klen += KEYLENSTEP {

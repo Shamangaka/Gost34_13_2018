@@ -1,4 +1,15 @@
 #include "Qalqan.h"
+#include <cstdlib>
+
+// Portable replacement for the MSVC-only fread_s: reads exactly n bytes.
+static void ReadInput(uint8_t* buf, size_t n, FILE* src)
+{
+    if (fread(buf, 1, n, src) != n)
+    {
+        fprintf(stderr, "input file too short\n");
+        exit(1);
+    }
+}
 
 extern uint8_t sb[256];
 
@@ -16,13 +27,13 @@ void Pr(const char*str, uint8_t*b, int len)
     printf("\n");
 }
 */
-void Pr(uint8_t* b, int len, FILE* f)
+void Pr(const uint8_t* b, int len, FILE* f)
 {
     for (int i = 0; i < len; i++)
         fprintf(f, "%02x", b[i]);
     fprintf(f, "\n");
 }
-void Pr(const char* str, uint8_t* b, int len, FILE* f)
+void Pr(const char* str, const uint8_t* b, int len, FILE* f)
 {
     fprintf(f, "%s:\n", str);
     for (int i = 0; i < len; i++)
@@ -30,7 +41,7 @@ void Pr(const char* str, uint8_t* b, int len, FILE* f)
     fprintf(f, "\n");
 }
 
-void KexpV(uint8_t* key, int klen, int blen, uint8_t* rkey, FILE* f)
+void KexpV(const uint8_t* key, int klen, int blen, uint8_t* rkey, FILE* f)
 {
     Pr("Initial key", key, klen, f);
     uint8_t r0[17], r1[15];
@@ -101,7 +112,7 @@ void KexpV(uint8_t* key, int klen, int blen, uint8_t* rkey, FILE* f)
     }
 }
 
-void KexpVV(uint8_t* key, int klen, int blen, uint8_t* rkey, FILE* f)
+void KexpVV(const uint8_t* key, int klen, int blen, uint8_t* rkey, FILE* f)
 {
     Pr("Initial key", key, klen, f);
     uint8_t r0[17], r1[15];
@@ -174,7 +185,7 @@ void KexpVV(uint8_t* key, int klen, int blen, uint8_t* rkey, FILE* f)
     }
 }
 
-void encryptV(uint8_t* data, uint8_t* rkey, int klen, int blen, uint8_t* res, FILE* f)
+void encryptV(const uint8_t* data, const uint8_t* rkey, int klen, int blen, uint8_t* res, FILE* f)
 {
     uint8_t block[MAXBLOCKLEN] = { 0 }, block2[MAXBLOCKLEN] = { 0 };
     Pr("Clear text", data, blen, f);
@@ -204,7 +215,6 @@ void encryptV(uint8_t* data, uint8_t* rkey, int klen, int blen, uint8_t* res, FI
 void ETestVectors(FILE* f)
 {
     uint8_t key[MAXKEYLEN] = { 0 }, rkey[RNDS(MAXKEYLEN) * MAXBLOCKLEN];
-    uint8_t data[MAXBLOCKLEN] = { 0 }, cipher[MAXBLOCKLEN] = { 0 };
     int blen_vals[3] = { 16, 32, 64 };
     for (int blen_ind = 0; blen_ind < 3; blen_ind++)
     {
@@ -231,7 +241,7 @@ void ShortTestLin(FILE* f, FILE* src)
     }
     else
     {
-        fread_s(din, MAXBLOCKLEN, sizeof(uint8_t), MAXBLOCKLEN, src);
+        ReadInput(din, MAXBLOCKLEN, src);
     }
 
     int blen_vals[BLEN_CNT] = { 16, 32, 64 };
@@ -264,7 +274,7 @@ void ShortTestSBox(FILE* f, FILE* src)
     }
     else
     {
-        fread_s(din, MAXBLOCKLEN, sizeof(uint8_t), MAXBLOCKLEN, src);
+        ReadInput(din, MAXBLOCKLEN, src);
         for (int i = 0; i < MAXBLOCKLEN; i++)
         {
             dout[i] = sb[din[i]];
@@ -290,7 +300,7 @@ void ShortTestKExp(FILE* f, FILE* src)
     }
     else
     {
-        fread_s(key, MAXKEYLEN, sizeof(uint8_t), MAXKEYLEN, src);
+        ReadInput(key, MAXKEYLEN, src);
     }
 
     fprintf(f, "\nKey expansion for %d bit key and %d bit block:\n", MAXKEYLEN * 8, MAXBLOCKLEN * 8);
@@ -313,8 +323,8 @@ void ShortTestBasicEnc(FILE* f, FILE* src)
     }
     else
     {
-        fread_s(data, MINBLOCKLEN, sizeof(uint8_t), MINBLOCKLEN, src);
-        fread_s(key, MINKEYLEN, sizeof(uint8_t), MINKEYLEN, src);
+        ReadInput(data, MINBLOCKLEN, src);
+        ReadInput(key, MINKEYLEN, src);
     }
 
     fprintf(f, "Encryption of 128 bit block and 256 bit key\n");
@@ -326,7 +336,7 @@ void ShortTestBasicEnc(FILE* f, FILE* src)
 void ShortTestEnc(FILE* f, FILE* src)
 {
     uint8_t key[MAXKEYLEN] = { 0 }, rkey[RNDS(MAXKEYLEN) * MAXBLOCKLEN];
-    uint8_t data[MAXBLOCKLEN], cipher[MAXBLOCKLEN] = { 0 };
+    uint8_t data[MAXBLOCKLEN]; // consumed from the input but, as in Appendix B, the vectors encrypt zeros
     int blen_vals[3] = { 16, 32, 64 };
 
     if (!src)
@@ -339,8 +349,8 @@ void ShortTestEnc(FILE* f, FILE* src)
     }
     else
     {
-        fread_s(data, MAXBLOCKLEN, sizeof(uint8_t), MAXBLOCKLEN, src);
-        fread_s(key, MAXKEYLEN, sizeof(uint8_t), MAXKEYLEN, src);
+        ReadInput(data, MAXBLOCKLEN, src);
+        ReadInput(key, MAXKEYLEN, src);
     }
 
     for (int klen = MINKEYLEN; klen <= MAXKEYLEN; klen += KEYLENSTEP)

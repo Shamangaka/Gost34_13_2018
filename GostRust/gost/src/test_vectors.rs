@@ -43,7 +43,7 @@ fn Pr<W: Write>(msg: &str, b: &[u8], f: &mut Option<&mut W>) {
 
 #[allow(non_snake_case)]
 fn KexpV<W: Write>(key: &mut [u8], klen: i32, blen: i32, rkey: &mut [u8], f: &mut Option<&mut W>) {
-    Pr("Initial key", key, f);
+    Pr("Initial key", &key[..klen as usize], f);
     let mut r0: [u8; 17] = [0; 17];
     let mut r1: [u8; 15] = [0; 15];
     let addk = klen - 32;
@@ -58,8 +58,8 @@ fn KexpV<W: Write>(key: &mut [u8], klen: i32, blen: i32, rkey: &mut [u8], f: &mu
         .for_each(|x| *x.1 = key[2 * x.0 + 1]);
     r0[15] = key[30];
     r0[16] = key[31];
-    Pr("Register L0\0", &r0, f);
-    Pr("Register L1\0", &r1, f);
+    Pr("Register L0", &r0, f);
+    Pr("Register L1", &r1, f);
     for r in 0..RNDS!(klen) {
         for k in 0..(blen + s) {
             let mut t0 = SB[r0[0] as usize]
@@ -95,8 +95,8 @@ fn KexpV<W: Write>(key: &mut [u8], klen: i32, blen: i32, rkey: &mut [u8], f: &mu
         }
         if s != 0 {
             fprintf!(f, "After prerun:\n");
-            Pr("Register L0\0", &r0, f);
-            Pr("Register L1\0", &r1, f);
+            Pr("Register L0", &r0, f);
+            Pr("Register L1", &r1, f);
         }
         s = 0;
     }
@@ -108,7 +108,7 @@ fn KexpV<W: Write>(key: &mut [u8], klen: i32, blen: i32, rkey: &mut [u8], f: &mu
 
 #[allow(non_snake_case)]
 fn KexpVV<W: Write>(key: &mut [u8], klen: i32, blen: i32, rkey: &mut [u8], f: &mut Option<&mut W>) {
-    Pr("Initial key", key, f);
+    Pr("Initial key", &key[..klen as usize], f);
     let mut r0: [u8; 17] = [0; 17];
     let mut r1: [u8; 15] = [0; 15];
     let addk = klen - 32;
@@ -125,8 +125,8 @@ fn KexpVV<W: Write>(key: &mut [u8], klen: i32, blen: i32, rkey: &mut [u8], f: &m
         .for_each(|x| *x.1 = key[2 * x.0 + 1]);
     r0[15] = key[30];
     r0[16] = key[31];
-    Pr("Register L0\0", &r0, f);
-    Pr("Register L1\0", &r1, f);
+    Pr("Register L0", &r0, f);
+    Pr("Register L1", &r1, f);
     for r in 0..RNDS!(klen) {
         let mut t0vec: Vec<u8> = Vec::with_capacity(32);
         let mut t1vec: Vec<u8> = Vec::with_capacity(32);
@@ -179,8 +179,8 @@ fn KexpVV<W: Write>(key: &mut [u8], klen: i32, blen: i32, rkey: &mut [u8], f: &m
                         t1 = t1.wrapping_add(key[(32 + step) as usize]);
                     }
                     if step < 32 {
-                        Pr("Register L0\0", &r0, f);
-                        Pr("Register L1\0", &r1, f);
+                        Pr("Register L0", &r0, f);
+                        Pr("Register L1", &r1, f);
                     }
                     step += 1;
                 }
@@ -198,8 +198,8 @@ fn KexpVV<W: Write>(key: &mut [u8], klen: i32, blen: i32, rkey: &mut [u8], f: &m
             r1[14] = t1;
             if step < 16 {
                 fprintf!(f, "Step %d\nFeedback L0: %02x, L1: %02x\n", k, t0, t1);
-                Pr("Register L0\0", &r0, f);
-                Pr("Register L1\0", &r1, f);
+                Pr("Register L0", &r0, f);
+                Pr("Register L1", &r1, f);
             }
         }
         s = 0;
@@ -220,40 +220,35 @@ fn encryptV<W: Write>(
     res: &mut [u8],
     f: &mut Option<&mut W>,
 ) {
+    let b = blen as usize;
     let mut block: [u8; MAXBLOCKLEN as usize] = [0; MAXBLOCKLEN as usize];
     let mut block2: [u8; MAXBLOCKLEN as usize] = [0; MAXBLOCKLEN as usize];
-    Pr("Clear text", data, f);
-    Pr("Key 0", rkey, f);
-    //super::cc_AddRk(&data, &rkey, 0, blen, &mut block);
-    super::qalqan::AddRk(data, rkey, 0, blen as usize, &mut block);
-    Pr("After add K0", &block, f);
-    super::qalqan::sBox(&block, &mut block2, blen as usize);
-    Pr("After Sub", &block2, f);
-    //super::cc_linOp(&block2, &mut block, blen);
-    super::qalqan::linOp(&block2, &mut block, blen as usize);
-    Pr("After linear", &block, f);
+    Pr("Clear text", &data[..b], f);
+    Pr("Key 0", &rkey[..b], f);
+    super::qalqan::AddRk(data, rkey, 0, b, &mut block);
+    Pr("After add K0", &block[..b], f);
+    super::qalqan::sBox(&block, &mut block2, b);
+    Pr("After Sub", &block2[..b], f);
+    super::qalqan::linOp(&block2, &mut block, b);
+    Pr("After linear", &block[..b], f);
     for i in 1..RNDS!(klen) - 1 {
         fprintf!(f, "Round %d.\nKey%d:\n", i, i);
         Pr3(&rkey[(i * blen) as usize..(i * blen + blen) as usize], f);
-        //super::cc_AddRkX(&block, &rkey, i, blen, &mut block2);
-        super::qalqan::AddRkX(&block, rkey, i as usize, blen as usize, &mut block2);
-        Pr("After addkey", &block2, f);
-        let b2 = block2.as_mut_ptr();
-        let b2s: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(b2, blen as usize) };
-        //super::cc_sBox(&mut block2, b2s, blen);
-        super::qalqan::sBox(&block2, b2s, blen as usize);
-        Pr("After Sub", &block2, f);
-        //super::cc_linOp(&block2, &mut block, blen);
-        super::qalqan::linOp(&block2, &mut block, blen as usize);
-        Pr("After linear", &block, f);
+        super::qalqan::AddRkX(&block, rkey, i as usize, b, &mut block2);
+        Pr("After addkey", &block2[..b], f);
+        let input = block2;
+        super::qalqan::sBox(&input, &mut block2, b);
+        Pr("After Sub", &block2[..b], f);
+        super::qalqan::linOp(&block2, &mut block, b);
+        Pr("After linear", &block[..b], f);
     }
     Pr(
         "Final key",
         &rkey[((RNDS!(klen) - 1) * blen) as usize..(((RNDS!(klen) - 1) * blen) + blen) as usize],
         f,
     );
-    super::qalqan::AddRk(&block, rkey, RNDS!(klen as usize) - 1, blen as usize, res);
-    Pr("Ciphertext", res, f);
+    super::qalqan::AddRk(&block, rkey, RNDS!(klen as usize) - 1, b, res);
+    Pr("Ciphertext", &res[..b], f);
 }
 
 fn short_test_lin<W: Write, R: Read>(f: &mut Option<&mut W>, src: &mut Option<&mut R>) {
@@ -371,7 +366,8 @@ fn short_test_enc<W: Write, R: Read>(f: &mut Option<&mut W>, src: &mut Option<&m
     for blen in blen_vals.iter() {
         data.fill(0);
         cipher.fill(0);
-        super::qalqan::Kexp(&key, MINKEYLEN as usize, (*blen) as usize, &mut rkey);
+        super::qalqan::Kexp(&key, MINKEYLEN as usize, (*blen) as usize, &mut rkey)
+            .expect("valid key and block length");
         fprintf!(
             f,
             "\n***** Encryption, key length = %d, block len = %d *****\n",

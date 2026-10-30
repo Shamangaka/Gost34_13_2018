@@ -1,10 +1,17 @@
 import GostLean
 
-def main : IO Unit := do
-  let state := init2 0
-  let src ← IO.FS.Handle.mk "../resources/input.bin" IO.FS.Mode.read
-  let f ← IO.FS.Handle.mk "../resources/output_lean.txt" IO.FS.Mode.write
-  let f := IO.FS.Stream.ofHandle f
-  let src := IO.FS.Stream.ofHandle src
-  ShortTestVectors f (some src)
-  f.flush
+/-- The repository's resources directory, from the GostLean or repository directory. -/
+def findResources : IO System.FilePath := do
+  for d in ["../resources", "resources", "../../resources"] do
+    if ← System.FilePath.pathExists (System.FilePath.mk d / "gold.txt") then
+      return d
+  throw (IO.userError "resources/gold.txt not found")
+
+def main (args : List String) : IO UInt32 := do
+  let resources ← findResources
+  if args.contains "--selftest" then
+    selfTest resources
+  else
+    let input ← IO.FS.readBinFile (resources / "input.bin")
+    IO.FS.writeFile (resources / "output_lean.txt") (shortTestVectors input.data)
+    return 0

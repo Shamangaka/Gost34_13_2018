@@ -1,158 +1,111 @@
 import GostLean.Qalqan
-import GostLean.PRNG
 
-def toHex (n : UInt8) : String :=
-    let d2 := n / 16;
-    let d1 := n % 16;
-    hexDigitRepr (UInt8.toNat d2) ++ hexDigitRepr (UInt8.toNat d1)
+/-! Generator of the СТ РК 4009-2025 Appendix A test vectors, in the format of
+the Appendix B reference code (`ShortTestVectors`). -/
 
-def random_arr (size:Nat) : IO ByteArray := do
-  let mut key := ByteArray.mk (mkArray (α := UInt8) MAXKEYLEN 0)
-  for i in [0:MAXKEYLEN - 1] do
-    let value := ← rnext3
-    key := key.set! i value
-  pure key
+def hexByte (x : UInt8) : String :=
+  let d := "0123456789abcdef".toList
+  String.mk [d[x.toNat / 16]!, d[x.toNat % 16]!]
 
-def Pr3(b: Subarray UInt8) (len: Nat) (f: IO.FS.Stream) := do
-    for i in  [0:len - 1] do
-        f.putStr s!"{toHex b[i]!}" -- :x2
-    f.putStr "\n"
+def hex (b : Array UInt8) : String := String.join (b.toList.map hexByte)
 
-def Pr(str: String) (b: Array UInt8) (len: Nat) (f: IO.FS.Stream) := do
-    f.putStr s!"{str}: \n"
-    for i in [0:len - 1] do
-        f.putStr s!"{toHex b[i]!}" -- :x2
-    f.putStr "\n"
+def pr (label : String) (b : Array UInt8) : String := s!"{label}:\n{hex b}\n"
 
-def KexpV(key: Array UInt8) (blen: Nat) (rkey: Array UInt8) (f: IO.FS.Stream) : IO (Array UInt8) := do
-    Pr "Initial key" key key.size f
-    let mut r0 := mkArray (α := UInt8) 17 0
-    let mut r1 := mkArray (α := UInt8) 15 0
-    let klen := key.size
-    let addk := klen - 32
-    let mut step := 0
-    let mut s := SHIFT
-    let mut rkey_local := rkey
-    for i in [0:15-1] do
-        r0 := (Array.set! r0 i key[2 * i]!)
-        r1 := (Array.set! r1 i key[2 * i + 1]!)
+def pad2 (n : Nat) : String := if n < 10 then s!" {n}" else toString n
 
-    r0 := Array.set! r0 15 key[30]!
-    r0 := Array.set! r0 16 key[31]!
-    Pr "Register L0" r0 17 f
-    Pr "Register L1" r1 15 f
-    for r in [0: (RNDS klen - 1)] do
-        for k in [0: blen + s - 1] do
-            let mut t0 := (sb[UInt8.toNat r0[0]!]! + r0[1]! + sb[UInt8.toNat r0[3]!]! + r0[7]! + sb[UInt8.toNat r0[12]!]! + r0[15]!);
-            let mut t1 := (sb[UInt8.toNat r1[0]!]! + r1[3]! + sb[UInt8.toNat r1[9]!]! + r1[12]! + sb[UInt8.toNat r1[14]!]!);
-            for i in [0: 14 - 1] do
-                r0 := Array.set! r0 i r0[i+1]!
-                r1 := Array.set! r1 i r1[i+1]!
+def shortTestLin (din : Array UInt8) : String := Id.run do
+  let mut out := "Linear operation:\n"
+  for bl in [16, 32, 64] do
+    let x := din.extract 0 bl
+    out := out ++ s!"Input ({bl * 8} bits):  {hex x}\nOutput ({bl * 8} bits): {hex (linear x)}\n"
+  return out ++ "\n"
 
-            r0 := Array.set! r0 14 r0[15]!
-            r0 := Array.set! r0 15 r0[16]!
-            if (k >= s) then
-                rkey_local := Array.set! rkey_local (r * blen + k - s) (t0 + r1[4]!)
-                if (step < addk) then
-                    if ((step &&& 1) != 0) then
-                        -- f.putStr s!"Additional key byte to L0: {toHex key[(32 + step)]!}\n"
-                        t0 := t0 + key[32 + step]!
-                    else
-                        -- f.putStr s!"Additional key byte to L1: {toHex key[(32 + step)]!}\n"
-                        t1 := t1 + key[32 + step]!
-                    step := step + 1
+def shortTestSBox (din : Array UInt8) : String :=
+  s!"Nonlinear operation:\nInput ({din.size * 8} bits):  {hex din}\nOutput ({din.size * 8} bits): {hex (subBytes din)}\n\n"
 
-                -- if (r < 2) then
-                --     f.putStr s!"Output {toHex (t0 + r1[4]! &&& 0xff)} (L0: {toHex t0}, L1: {toHex r1[4]!})\n"
-            r0 := Array.set! r0 16 t0
-            r1 := Array.set! r1 14 t1
-            -- if (step < 16) then
-            --     f.putStr s!"Step {k}\nFeedback L0: {toHex t0}, L1: {toHex t1}\n"
-            --     Pr "Register L0" r0 17 f
-            --     Pr "Register L1" r1 15 f
-        if (s != 0) then
-            f.putStr s!"After prerun:\n"
-            Pr "Register L0" r0 17 f
-            Pr "Register L1" r1 15 f
-        s := 0
+/-- Mirrors KexpV (`verbose = false`) and KexpVV (`verbose = true`). -/
+def kexpTrace (key : Array UInt8) (blen : Nat) (verbose : Bool) : String := Id.run do
+  let klen := key.size
+  let n := RNDS klen
+  let addk := klen - 32
+  let mut r := KeyRegs.load key
+  let mut out := pr "Initial key" key ++ pr "Register L0" r.l0 ++ pr "Register L1" r.l1
+  let mut rk : Array UInt8 := mkArray (n * blen) 0
+  let mut step := 0
+  let mut s := SHIFT
+  for rnd in [0:n] do
+    for k in [0:blen + s] do
+      let (f0, f1) := r.feedback
+      r := r.shift
+      let mut t0 := f0
+      let mut t1 := f1
+      if k >= s then
+        rk := rk.set! (rnd * blen + k - s) (t0 + r.l1[4]!)
+        if step < addk then
+          if step % 2 == 1 then
+            if verbose && step < 32 then
+              out := out ++ s!"Additional key byte to L0: {hexByte key[32 + step]!}\n"
+            t0 := t0 + key[32 + step]!
+          else
+            if verbose && step < 32 then
+              out := out ++ s!"Additional key byte to L1: {hexByte key[32 + step]!}\n"
+            t1 := t1 + key[32 + step]!
+          if verbose && step < 32 then
+            out := out ++ pr "Register L0" r.l0 ++ pr "Register L1" r.l1
+          step := step + 1
+        if verbose && step < 8 then
+          out := out ++ s!"Output {hexByte (t0 + r.l1[4]!)} (L0: {hexByte t0}, L1: {hexByte r.l1[4]!})\n"
+      r := r.store t0 t1
+      if verbose && step < 16 then
+        out := out ++ s!"Step {k}\nFeedback L0: {hexByte t0}, L1: {hexByte t1}\n" ++ pr "Register L0" r.l0 ++ pr "Register L1" r.l1
+    if !verbose && s != 0 then
+      out := out ++ "After prerun:\n" ++ pr "Register L0" r.l0 ++ pr "Register L1" r.l1
+    s := 0
+  for i in [0:n] do
+    out := out ++ s!"Round {pad2 i} key: {hex (roundKey rk blen i)}\n"
+  return out
 
-    for r in [0:(RNDS klen) - 1] do
-        f.putStr s!"Round {r} key: "
-        Pr3 (rkey.toSubarray (blen * r) (blen * r + blen - 1)) blen f
-    return rkey_local
+/-- Mirrors encryptV: every intermediate value of one encryption. -/
+def encTrace (c : Cipher) (data : Array UInt8) : String := Id.run do
+  let n := c.rounds
+  let bl := c.blen
+  let mut out := pr "Clear text" data ++ pr "Key 0" (roundKey c.rk bl 0)
+  let mut b := addMod data (roundKey c.rk bl 0)
+  out := out ++ pr "After add K0" b
+  b := subBytes b
+  out := out ++ pr "After Sub" b
+  b := linear b
+  out := out ++ pr "After linear" b
+  for i in [1:n - 1] do
+    out := out ++ s!"Round {i}.\nKey{i}:\n{hex (roundKey c.rk bl i)}\n"
+    b := xorBytes b (roundKey c.rk bl i)
+    out := out ++ pr "After addkey" b
+    b := subBytes b
+    out := out ++ pr "After Sub" b
+    b := linear b
+    out := out ++ pr "After linear" b
+  out := out ++ pr "Final key" (roundKey c.rk bl (n - 1))
+  return out ++ pr "Ciphertext" (addMod b (roundKey c.rk bl (n - 1)))
 
-def KexpVV(key: Array UInt8) (blen: Nat) (rkey: Array UInt8) (f: IO.FS.Stream) : IO (Array UInt8) := do
-    Pr "Initial key" key key.size f
-    let mut r0 := mkArray (α := UInt8) 17 0
-    let mut r1 := mkArray (α := UInt8) 15 0
-    let klen := key.size
-    let addk := klen - 32
-    let mut step := 0
-    let mut s := SHIFT
-    let mut rkey_local := rkey
-    for i in [0:15-1] do
-        r0 := (Array.set! r0 i key[2 * i]!)
-        r1 := (Array.set! r1 i key[2 * i + 1]!)
+def shortTestKExp (key : Array UInt8) : String :=
+  s!"\nKey expansion for {key.size * 8} bit key and {MAXBLOCKLEN * 8} bit block:\n" ++ kexpTrace key MAXBLOCKLEN true ++ "\n"
 
-    r0 := Array.set! r0 15 key[30]!
-    r0 := Array.set! r0 16 key[31]!
-    Pr "Register L0" r0 17 f
-    Pr "Register L1" r1 15 f
-    for r in [0: (RNDS klen - 1)] do
-        for k in [0: blen + s - 1] do
-            let mut t0 := (sb[UInt8.toNat r0[0]!]! + r0[1]! + sb[UInt8.toNat r0[3]!]! + r0[7]! + sb[UInt8.toNat r0[12]!]! + r0[15]!);
-            let mut t1 := (sb[UInt8.toNat r1[0]!]! + r1[3]! + sb[UInt8.toNat r1[9]!]! + r1[12]! + sb[UInt8.toNat r1[14]!]!);
-            for i in [0: 14 - 1] do
-                r0 := Array.set! r0 i r0[i+1]!
-                r1 := Array.set! r1 i r1[i+1]!
+def shortTestEnc (key : Array UInt8) : String := Id.run do
+  let mut out := ""
+  for klen in [32, 48, 64, 80, 96, 112, 128] do
+    out := out ++ s!"\n***** Key expansion, key length = {klen * 8}, block length = {MINBLOCKLEN * 8} *****\n"
+      ++ kexpTrace (key.extract 0 klen) MINBLOCKLEN false ++ "\n"
+  for blen in [16, 32, 64] do
+    match Cipher.new? (key.extract 0 MINKEYLEN) blen with
+    | some c =>
+      out := out ++ s!"\n***** Encryption, key length = {MINKEYLEN * 8}, block len = {blen * 8} *****\n"
+        ++ encTrace c (mkArray blen 0) ++ "\n"
+    | none => pure ()
+  return out
 
-            r0 := Array.set! r0 14 r0[15]!
-            r0 := Array.set! r0 15 r0[16]!
-            if (k >= s) then
-                rkey_local := Array.set! rkey_local (r * blen + k - s) (t0 + r1[4]!)
-                if (step < addk) then
-                    if ((step &&& 1) != 0) then
-                        if (step < 32) then
-                            f.putStr s!"Additional key byte to L0: {toHex key[(32 + step)]!}\n"
-                        t0 := t0 + key[32 + step]!
-                    else
-                        if (step < 32) then
-                            f.putStr s!"Additional key byte to L1: {toHex key[(32 + step)]!}\n"
-                        t1 := t1 + key[32 + step]!
-                    if (step < 32) then
-                      Pr "Register L0" r0 17 f
-                      Pr "Register L1" r1 15 f
-                    step := step + 1
-
-                if (step < 8) then
-                    f.putStr s!"Output {toHex (t0 + r1[4]! &&& 0xff)} (L0: {toHex t0}, L1: {toHex r1[4]!})\n"
-            r0 := Array.set! r0 16 t0
-            r1 := Array.set! r1 14 t1
-            if (step < 16) then
-                f.putStr s!"Step {k}\nFeedback L0: {toHex t0}, L1: {toHex t1}\n"
-                Pr "Register L0" r0 17 f
-                Pr "Register L1" r1 15 f
-        s := 0
-    return rkey_local
-
-def ShortTestKExp (f: IO.FS.Stream) (src: Option IO.FS.Stream) : (IO Unit) := do
-    -- let mut key := mkArray (α := UInt8) MAXKEYLEN 0
-    let rkey := mkArray (α := UInt8) ((RNDS MAXKEYLEN) * MAXBLOCKLEN) 0
-    let key: IO ByteArray :=
-      match src with
-      | some src  => src.read (USize.ofNat MAXKEYLEN)
-      | none      => random_arr MAXKEYLEN
-
-    f.putStr s!"\nKey expansion for {(MAXKEYLEN * 8)} bit key and {MAXBLOCKLEN * 8} bit block:\n"
-    let key := (← key).data
-    let dummy ← KexpVV key MAXBLOCKLEN rkey f
-    f.putStr "\n"
-
-def ShortTestVectors (f: IO.FS.Stream) (src: Option IO.FS.Stream) : (IO Unit) := do
-
-    -- ShortTestLin(f, src);
-    -- ShortTestLin(f, src);
-    -- ShortTestSBox(f, src);
-    ShortTestKExp f src
-    -- //ShortTestBasicEnc(f);
-    -- ShortTestEnc(f, src);
+/-- The whole Appendix A output for the bytes of resources/input.bin, read in
+    the same order as the reference code reads them. -/
+def shortTestVectors (input : Array UInt8) : String :=
+  let part (a b : Nat) := input.extract a b
+  shortTestLin (part 0 64) ++ shortTestLin (part 64 128) ++ shortTestSBox (part 128 192)
+    ++ shortTestKExp (part 192 320) ++ shortTestEnc (part 384 512)

@@ -1,10 +1,12 @@
-﻿using System.Diagnostics;
+﻿using System.Buffers.Binary;
+using System.Numerics;
 
 namespace GostCsharp;
 
 internal static class Qalqan
 {
-    // SBox
+    // S (Table 1) and S^-1 (Table 3) with the correct values; the printed
+    // tables misprint three cells each ("de", "ce", "1e" for dc, cc, 1c).
     internal static byte[] sb = new byte[256]{ /* ded: OK, dif: 4, dip: 7, lin: 32, pow: 7, cor: 0, dst: 112, sac: 116..140, cyc: 256 */
 0xd1, 0xb5, 0xa6, 0x74, 0x2f, 0xb2, 0x03, 0x77, 0xae, 0xb3, 0x60, 0x95, 0xfd, 0xf8, 0xc7, 0xf0,
 0x2b, 0xce, 0xa5, 0x91, 0x4c, 0x6f, 0xf3, 0x4f, 0x82, 0x01, 0x45, 0x76, 0x9f, 0xed, 0x41, 0xfb,
@@ -54,11 +56,17 @@ internal static class Qalqan
 
     // This was defines, if not inlined should be rewritten
     public static int RNDS(int x) => (16 + (x - 32) / 16);
-    static uint ROTL(uint x, int s) => ((x << s) | (x >> (32 - s)));
-    static ulong ROTL64(ulong x, int s) => ((x << s) | (x >> (64 - s)));
+    static uint ROTL(uint x, int s) => BitOperations.RotateLeft(x, s);
+    static ulong ROTL64(ulong x, int s) => BitOperations.RotateLeft(x, s);
 
-    public static unsafe void Kexp(byte* key, int klen, int blen, byte* rkey)
+    // Key length 32..128 bytes in steps of 16, block length 16, 32 or 64 bytes (section 5).
+    public static bool ValidParams(int klen, int blen) =>
+        klen >= MINKEYLEN && klen <= MAXKEYLEN && klen % KEYLENSTEP == 0 && (blen == 16 || blen == 32 || blen == 64);
+
+    public static unsafe bool Kexp(byte* key, int klen, int blen, byte* rkey)
     {
+        if (!ValidParams(klen, blen))
+            return false;
         byte* r0 = stackalloc byte[17], r1 = stackalloc byte[15];
         int addk = klen - 32, step = 0, s = SHIFT;
         for (int i = 0; i < 15; i++)
@@ -98,6 +106,9 @@ internal static class Qalqan
             }
             s = 0;
         }
+        new Span<byte>(r0, 17).Clear();
+        new Span<byte>(r1, 15).Clear();
+        return true;
     }
     public static unsafe void lin344(uint* din, uint* dout)
     {
@@ -131,16 +142,39 @@ internal static class Qalqan
         dout[7] = din[7] ^ ROTL64(dout[0], c2[0]) ^ ROTL64(dout[1], c2[1]) ^ ROTL64(dout[2], c2[2]) ^ ROTL64(dout[3], c2[3]) ^ ROTL64(dout[4], c2[4]) ^ ROTL64(dout[5], c2[5]) ^ ROTL64(dout[6], c2[6]);
     }
 
-    public static unsafe void linOp(void* d, void* r, int blocklen)
+    // Words are little-endian whatever the host byte order (Appendix A); the
+    // previous code reinterpreted the byte buffers as uint*/ulong*.
+    public static unsafe void linOp(byte* d, byte* r, int blocklen) => ApplyLinear(d, r, blocklen, inverse: false);
+
+    static unsafe void ApplyLinear(byte* d, byte* r, int blocklen, bool inverse)
     {
         switch (blocklen)
         {
-            case 16: lin344((uint*)d, (uint*)r); break;
-            case 32: lin384((uint*)d, (uint*)r); break;
-            case 64: lin388((ulong*)d, (ulong*)r); break;
+            case 16:
+            case 32:
+                {
+                    int n = blocklen / 4;
+                    uint* din = stackalloc uint[8], dout = stackalloc uint[8];
+                    for (int i = 0; i < n; i++)
+                        din[i] = BinaryPrimitives.ReadUInt32LittleEndian(new ReadOnlySpan<byte>(d + 4 * i, 4));
+                    if (blocklen == 16) { if (inverse) ilin344(din, dout); else lin344(din, dout); }
+                    else { if (inverse) ilin384(din, dout); else lin384(din, dout); }
+                    for (int i = 0; i < n; i++)
+                        BinaryPrimitives.WriteUInt32LittleEndian(new Span<byte>(r + 4 * i, 4), dout[i]);
+                    break;
+                }
+            case 64:
+                {
+                    ulong* din = stackalloc ulong[8], dout = stackalloc ulong[8];
+                    for (int i = 0; i < 8; i++)
+                        din[i] = BinaryPrimitives.ReadUInt64LittleEndian(new ReadOnlySpan<byte>(d + 8 * i, 8));
+                    if (inverse) ilin388(din, dout); else lin388(din, dout);
+                    for (int i = 0; i < 8; i++)
+                        BinaryPrimitives.WriteUInt64LittleEndian(new Span<byte>(r + 8 * i, 8), dout[i]);
+                    break;
+                }
             default:
-                Debug.Assert(false);
-                break;
+                throw new ArgumentException("block length must be 16, 32 or 64 bytes", nameof(blocklen));
         }
     }
 
@@ -169,8 +203,10 @@ internal static class Qalqan
         }
     }
 
-    static unsafe void encrypt(byte* data, byte* rkey, int klen, int blen, byte* res)
+    public static unsafe bool encrypt(byte* data, byte* rkey, int klen, int blen, byte* res)
     {
+        if (!ValidParams(klen, blen))
+            return false;
         byte* block = stackalloc byte[MAXBLOCKLEN], block2 = stackalloc byte[MAXBLOCKLEN];
         AddRk(data, rkey, 0, blen, block);
         sBox(block, block2, blen);
@@ -182,9 +218,10 @@ internal static class Qalqan
             linOp(block2, block, blen);
         }
         AddRk(block, rkey, RNDS(klen) - 1, blen, res);
+        return true;
     }
 
-    static unsafe void InvAddRk(byte* block, byte* rkey, int nr, int blen, byte* res)
+    public static unsafe void InvAddRk(byte* block, byte* rkey, int nr, int blen, byte* res)
     {
         int tmp = block[0] - rkey[blen * nr];
         res[0] = (byte)tmp;
@@ -197,7 +234,7 @@ internal static class Qalqan
         }
     }
 
-    static unsafe void ilin344(uint* din, uint* dout)
+    public static unsafe void ilin344(uint* din, uint* dout)
     {
         dout[3] = din[3] ^ ROTL(din[0], c0[0]) ^ ROTL(din[1], c0[1]) ^ ROTL(din[2], c0[2]);
         dout[2] = din[2] ^ ROTL(dout[3], c0[0]) ^ ROTL(din[0], c0[1]) ^ ROTL(din[1], c0[2]);
@@ -205,7 +242,7 @@ internal static class Qalqan
         dout[0] = din[0] ^ ROTL(dout[1], c0[0]) ^ ROTL(dout[2], c0[1]) ^ ROTL(dout[3], c0[2]);
     }
 
-    static unsafe void ilin384(uint* din, uint* dout)
+    public static unsafe void ilin384(uint* din, uint* dout)
     {
         dout[7] = din[7] ^ ROTL(din[0], c1[0]) ^ ROTL(din[1], c1[1]) ^ ROTL(din[2], c1[2]) ^ ROTL(din[3], c1[3]) ^ ROTL(din[4], c1[4]) ^ ROTL(din[5], c1[5]) ^ ROTL(din[6], c1[6]);
         dout[6] = din[6] ^ ROTL(dout[7], c1[0]) ^ ROTL(din[0], c1[1]) ^ ROTL(din[1], c1[2]) ^ ROTL(din[2], c1[3]) ^ ROTL(din[3], c1[4]) ^ ROTL(din[4], c1[5]) ^ ROTL(din[5], c1[6]);
@@ -217,7 +254,7 @@ internal static class Qalqan
         dout[0] = din[0] ^ ROTL(dout[1], c1[0]) ^ ROTL(dout[2], c1[1]) ^ ROTL(dout[3], c1[2]) ^ ROTL(dout[4], c1[3]) ^ ROTL(dout[5], c1[4]) ^ ROTL(dout[6], c1[5]) ^ ROTL(dout[7], c1[6]);
     }
 
-    static unsafe void ilin388(ulong* din, ulong* dout)
+    public static unsafe void ilin388(ulong* din, ulong* dout)
     {
         dout[7] = din[7] ^ ROTL64(din[0], c2[0]) ^ ROTL64(din[1], c2[1]) ^ ROTL64(din[2], c2[2]) ^ ROTL64(din[3], c2[3]) ^ ROTL64(din[4], c2[4]) ^ ROTL64(din[5], c2[5]) ^ ROTL64(din[6], c2[6]);
         dout[6] = din[6] ^ ROTL64(dout[7], c2[0]) ^ ROTL64(din[0], c2[1]) ^ ROTL64(din[1], c2[2]) ^ ROTL64(din[2], c2[3]) ^ ROTL64(din[3], c2[4]) ^ ROTL64(din[4], c2[5]) ^ ROTL64(din[5], c2[6]);
@@ -229,27 +266,18 @@ internal static class Qalqan
         dout[0] = din[0] ^ ROTL64(dout[1], c2[0]) ^ ROTL64(dout[2], c2[1]) ^ ROTL64(dout[3], c2[2]) ^ ROTL64(dout[4], c2[3]) ^ ROTL64(dout[5], c2[4]) ^ ROTL64(dout[6], c2[5]) ^ ROTL64(dout[7], c2[6]);
     }
 
-    static unsafe void InvlinOp(void* d, void* r, int blocklen)
-    {
-        switch (blocklen)
-        {
-            case 16: ilin344((uint*)d, (uint*)r); break;
-            case 32: ilin384((uint*)d, (uint*)r); break;
-            case 64: ilin388((ulong*)d, (ulong*)r); break;
-            default:
-                Debug.Assert(false);
-                break;
-        }
-    }
+    public static unsafe void InvlinOp(byte* d, byte* r, int blocklen) => ApplyLinear(d, r, blocklen, inverse: true);
 
-    static unsafe void InvsBox(byte* data, byte* res, int blen)  // 32 ops
+    public static unsafe void InvsBox(byte* data, byte* res, int blen)
     {
         for (int i = 0; i < blen; i++)
             res[i] = isb[data[i]];
     }
 
-    static unsafe void decrypt(byte* data, byte* rkey, int klen, int blen, byte* res)
+    public static unsafe bool decrypt(byte* data, byte* rkey, int klen, int blen, byte* res)
     {
+        if (!ValidParams(klen, blen))
+            return false;
         byte* block = stackalloc byte[MAXBLOCKLEN], block2 = stackalloc byte[MAXBLOCKLEN];
         InvAddRk(data, rkey, RNDS(klen) - 1, blen, block);
         for (int i = RNDS(klen) - 2; i > 0; i--)
@@ -261,5 +289,6 @@ internal static class Qalqan
         InvlinOp(block, block2, blen);
         InvsBox(block2, block2, blen);
         InvAddRk(block2, rkey, 0, blen, res);
+        return true;
     }
 }

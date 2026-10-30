@@ -1,5 +1,10 @@
-import GostLean.Support
+-- СТ РК 4009-2025 block cipher (Qalqan): key schedule, rounds, encryption
+-- and decryption for 128/256/512-bit blocks and 256..1024-bit keys.
+-- Byte 0 of a block is least significant for the modulo-2^n key additions
+-- and the linear transform works on little-endian words (Appendix A).
 
+-- S (Table 1) and S^-1 (Table 3) with the correct values; the printed tables
+-- misprint three cells each ("de", "ce", "1e" for dc, cc, 1c).
 def sb : Array UInt8 :=
     #[ -- ded: OK, dif: 4, dip: 7, lin: 32, pow: 7, cor: 0, dst: 112, sac: 116..140, cyc: 256
         0xd1, 0xb5, 0xa6, 0x74, 0x2f, 0xb2, 0x03, 0x77, 0xae, 0xb3, 0x60, 0x95, 0xfd, 0xf8, 0xc7, 0xf0,
@@ -38,10 +43,10 @@ def isb : Array UInt8 :=
         0x43, 0x8c, 0x29, 0xf6, 0x65, 0x61, 0x5a, 0x2b, 0x76, 0x62, 0xe5, 0x24, 0xf9, 0x1d, 0xef, 0xb3,
         0x0f, 0x26, 0x73, 0x16, 0xe8, 0x91, 0x38, 0x92, 0x0d, 0x25, 0xa4, 0x1f, 0x32, 0x0c, 0xc0, 0x93
     ]
-def c0 := #[ 1, 17, 14 ]
-def c1 := #[ 3, 5, 11, 21, 16, 30, 19 ]
-def c2 := #[ 4, 0, 22, 27, 47, 4, 61 ]
-
+-- Shift constants of Table 2.
+def c0 : Array Nat := #[ 1, 17, 14 ]
+def c1 : Array Nat := #[ 3, 5, 11, 21, 16, 30, 19 ]
+def c2 : Array Nat := #[ 4, 0, 22, 27, 47, 4, 61 ]
 
 def SHIFT := 17
 def MINBLOCKLEN := 16
@@ -50,117 +55,161 @@ def MINKEYLEN := 32
 def MAXKEYLEN := 128
 def KEYLENSTEP := 16
 
-def IsBlockLen x := x % MINBLOCKLEN == 0 && x >= MINBLOCKLEN && x <= MAXBLOCKLEN
+/-- Number of round keys N = 16 + (KLen - 256) / 128 (key length in bytes). -/
+def RNDS (x : Nat) : Nat := 16 + (x - 32) / 16
 
-def RNDS x :=
-    16 + (x - 32) / 16
-def ROTL x s :=
-    (x <<< s) ||| (x >>> (32 - s))
-def ROTL_32 x s :=
-    ROTL (UInt32.toNat x) s
-def ROTL64 (x: UInt64) s :=
-    (x <<< s) ||| (x >>> (64 - s))
+/-- Key length 32..128 bytes in steps of 16, block length 16, 32 or 64 bytes (section 5). -/
+def validParams (klen blen : Nat) : Bool :=
+  MINKEYLEN ≤ klen && klen ≤ MAXKEYLEN && klen % KEYLENSTEP == 0 && (blen == 16 || blen == 32 || blen == 64)
 
-structure Kexp_state where
-  step : Nat
-  s : Nat
-deriving Repr
+def rotl32 (x : UInt32) (s : Nat) : UInt32 :=
+  if s % 32 == 0 then x else (x <<< UInt32.ofNat s) ||| (x >>> UInt32.ofNat (32 - s))
 
--- I use IO here, since it should be something monadic,
--- but I probably should use other monadic type
-def Kexp(key: Array UInt8) (blen: Nat) (rkey: Array UInt8) : Id (Array UInt8) := do
-    let mut r0 := mkArray (α := UInt8) 17 0
-    let mut r1 := mkArray (α := UInt8) 15 0
-    let klen := key.size
-    let addk := klen - 32
-    let mut step := 0
-    let mut s := SHIFT
-    let mut rkey_local := rkey
-    for i in [0:15-1] do
-        r0 := (Array.set! r0 i key[2 * i]!)
-        r1 := (Array.set! r1 i key[2 * i + 1]!)
+def rotl64 (x : UInt64) (s : Nat) : UInt64 :=
+  if s % 64 == 0 then x else (x <<< UInt64.ofNat s) ||| (x >>> UInt64.ofNat (64 - s))
 
-    r0 := Array.set! r0 15 key[30]!
-    r0 := Array.set! r0 16 key[31]!
-    for r in [0: (RNDS klen - 1)] do
-        for k in [0: blen + s - 1] do
-            let mut t0 := (sb[UInt8.toNat r0[0]!]! + r0[1]! + sb[UInt8.toNat r0[3]!]! + r0[7]! + sb[UInt8.toNat r0[12]!]! + r0[15]!);
-            let mut t1 := (sb[UInt8.toNat r1[0]!]! + r1[3]! + sb[UInt8.toNat r1[9]!]! + r1[12]! + sb[UInt8.toNat r1[14]!]!);
-            for i in [0: 14 - 1] do
-                r0 := Array.set! r0 i r0[i+1]!
-                r1 := Array.set! r1 i r1[i+1]!
+def sbox (x : UInt8) : UInt8 := sb[x.toNat]!
+def invSbox (x : UInt8) : UInt8 := isb[x.toNat]!
 
-            r0 := Array.set! r0 14 r0[15]!
-            r0 := Array.set! r0 15 r0[16]!
-            if (k >= s) then
-                rkey_local := Array.set! rkey_local (r * blen + k - s) (t0 + r1[4]!)
-                if (step < addk) then
-                    if ((step &&& 1) != 0) then
-                        t0 := t0 + key[32 + step]!
-                    else
-                        t1 := t1 + key[32 + step]!
-                    step := step + 1
+/-! ### Key schedule (section 8) -/
 
-            r0 := Array.set! r0 16 t0
-            r1 := Array.set! r1 14 t1
-        s := 0
-    return rkey_local
+/-- The byte shift registers L0 (17 cells) and L1 (15 cells). -/
+structure KeyRegs where
+  l0 : Array UInt8
+  l1 : Array UInt8
 
-def rot_4_32 x1 x2 x3 x4 :=
-    (UInt32.ofNat ((UInt32.toNat x1 ^^^ (ROTL_32 x2 c0[0]) ^^^ (ROTL_32 x3 c0[1]) ^^^ (ROTL_32 x4 c0[2]))))
+/-- L0 = {K0, K2, ..., K28, K30, K31}, L1 = {K1, K3, ..., K29}. -/
+def KeyRegs.load (key : Array UInt8) : KeyRegs :=
+  { l0 := (List.range 15).toArray.map (fun i => key[2 * i]!) ++ #[key[30]!, key[31]!]
+    l1 := (List.range 15).toArray.map (fun i => key[2 * i + 1]!) }
 
-def rot_8_32 x1 x2 x3 x4 x5 x6 x7 x8 :=
-    UInt32.ofNat ((UInt32.toNat x1
-        ^^^ (ROTL (UInt32.toNat x2) c1[0])
-        ^^^ (ROTL (UInt32.toNat x3) c1[1])
-        ^^^ (ROTL (UInt32.toNat x4) c1[2])
-        ^^^ (ROTL (UInt32.toNat x5) c1[3])
-        ^^^ (ROTL (UInt32.toNat x6) c1[4])
-        ^^^ (ROTL (UInt32.toNat x7) c1[5])
-        ^^^ (ROTL (UInt32.toNat x8) c1[6])))
+/-- Feedback bytes (sums modulo 256):
+    t0 = S(L0_0) + L0_1 + S(L0_3) + L0_7 + S(L0_12) + L0_16,
+    t1 = S(L1_0) + L1_3 + S(L1_9) + L1_12 + S(L1_14). -/
+def KeyRegs.feedback (r : KeyRegs) : UInt8 × UInt8 :=
+  (sbox r.l0[0]! + r.l0[1]! + sbox r.l0[3]! + r.l0[7]! + sbox r.l0[12]! + r.l0[16]!,
+   sbox r.l1[0]! + r.l1[3]! + sbox r.l1[9]! + r.l1[12]! + sbox r.l1[14]!)
 
-def rot_8_64 x1 x2 x3 x4 x5 x6 x7 x8 :=
-    UInt64.ofNat ((UInt64.toNat x1
-        ^^^ (ROTL (UInt64.toNat x2) c1[0])
-        ^^^ (ROTL (UInt64.toNat x3) c1[1])
-        ^^^ (ROTL (UInt64.toNat x4) c1[2])
-        ^^^ (ROTL (UInt64.toNat x5) c1[3])
-        ^^^ (ROTL (UInt64.toNat x6) c1[4])
-        ^^^ (ROTL (UInt64.toNat x7) c1[5])
-        ^^^ (ROTL (UInt64.toNat x8) c1[6])))
+/-- Moves both registers one cell towards index 0; the last cells keep their
+    old value until `store` writes the new feedback bytes. -/
+def KeyRegs.shift (r : KeyRegs) : KeyRegs :=
+  { l0 := r.l0.extract 1 17 ++ #[r.l0[16]!], l1 := r.l1.extract 1 15 ++ #[r.l1[14]!] }
 
-def lin344 (din: Subarray2 UInt32) (dout: Subarray2 UInt32) : Subarray2 UInt32 :=
-    let dout := dout.set! 0 (rot_4_32 (din.get! UInt32 0) (din.get! UInt32 1) (din.get! UInt32 2) (din.get! UInt32 3))
-    let dout := dout.set! 1 (rot_4_32 (din.get! UInt32 1) (din.get! UInt32 2) (din.get! UInt32 3) (dout.get! UInt32 0))
-    let dout := dout.set! 2 (rot_4_32 (din.get! UInt32 2) (din.get! UInt32 3) (dout.get! UInt32 0) (dout.get! UInt32 1))
-    let dout := dout.set! 3 (rot_4_32 (din.get! UInt32 3) (dout.get! UInt32 0) (dout.get! UInt32 1) (dout.get! UInt32 2))
-    dout
+def KeyRegs.store (r : KeyRegs) (t0 t1 : UInt8) : KeyRegs :=
+  { l0 := r.l0.set! 16 t0, l1 := r.l1.set! 14 t1 }
 
-def lin348 (din: Subarray2 UInt32) (dout: Subarray2 UInt32) : Subarray2 UInt32 :=
-    let dout := dout.set! 0 (rot_8_32 (din.get! UInt32 0) (din.get! UInt32 1) (din.get! UInt32 2) (din.get! UInt32 3) (din.get! UInt32 4) (din.get! UInt32 5) (din.get! UInt32 6) (din.get! UInt32 7))
-    let dout := dout.set! 1 (rot_8_32 (din.get! UInt32 1) (din.get! UInt32 2) (din.get! UInt32 3) (din.get! UInt32 4) (din.get! UInt32 5) (din.get! UInt32 6) (din.get! UInt32 7) (dout.get! UInt32 0))
-    let dout := dout.set! 2 (rot_8_32 (din.get! UInt32 2) (din.get! UInt32 3) (din.get! UInt32 4) (din.get! UInt32 5) (din.get! UInt32 6) (din.get! UInt32 7) (dout.get! UInt32 0) (dout.get! UInt32 1))
-    let dout := dout.set! 3 (rot_8_32 (din.get! UInt32 3) (din.get! UInt32 4) (din.get! UInt32 5) (din.get! UInt32 6) (din.get! UInt32 7) (dout.get! UInt32 0) (dout.get! UInt32 1) (dout.get! UInt32 2))
-    let dout := dout.set! 4 (rot_8_32 (din.get! UInt32 4) (din.get! UInt32 5) (din.get! UInt32 6) (din.get! UInt32 7) (dout.get! UInt32 0) (dout.get! UInt32 1) (dout.get! UInt32 2) (dout.get! UInt32 3))
-    let dout := dout.set! 5 (rot_8_32 (din.get! UInt32 5) (din.get! UInt32 6) (din.get! UInt32 7) (dout.get! UInt32 0) (dout.get! UInt32 1) (dout.get! UInt32 2) (dout.get! UInt32 3) (dout.get! UInt32 4))
-    let dout := dout.set! 6 (rot_8_32 (din.get! UInt32 6) (din.get! UInt32 7) (dout.get! UInt32 0) (dout.get! UInt32 1) (dout.get! UInt32 2) (dout.get! UInt32 3) (dout.get! UInt32 4) (dout.get! UInt32 5))
-    let dout := dout.set! 7 (rot_8_32 (din.get! UInt32 7) (dout.get! UInt32 0) (dout.get! UInt32 1) (dout.get! UInt32 2) (dout.get! UInt32 3) (dout.get! UInt32 4) (dout.get! UInt32 5) (dout.get! UInt32 6))
-    dout
+/-- Round keys: RNDS(klen) * blen bytes. After 17 warm-up steps each step
+    yields the L0 feedback ∔ L1_4; key bytes beyond 256 bits are added to the
+    L1 feedback on even steps and to the L0 feedback on odd steps, after the
+    round-key byte is taken. -/
+def kexp (key : Array UInt8) (blen : Nat) : Array UInt8 := Id.run do
+  let extra := key.size - 32
+  let mut r := KeyRegs.load key
+  for _ in [0:SHIFT] do
+    let (t0, t1) := r.feedback
+    r := r.shift.store t0 t1
+  let n := RNDS key.size * blen
+  let mut rk : Array UInt8 := Array.mkEmpty n
+  for j in [0:n] do
+    let (t0, t1) := r.feedback
+    let s := r.shift
+    rk := rk.push (t0 + s.l1[4]!)
+    let (t0, t1) :=
+      if j < extra then
+        if j % 2 == 0 then (t0, t1 + key[32 + j]!) else (t0 + key[32 + j]!, t1)
+      else (t0, t1)
+    r := s.store t0 t1
+  return rk
 
-def lin388 (din: Subarray2 UInt64) (dout: Subarray2 UInt64) : Subarray2 UInt64 :=
-    let dout := dout.set! 0 (rot_8_64 (din.get! UInt64 0) (din.get! UInt64 1) (din.get! UInt64 2) (din.get! UInt64 3) (din.get! UInt64 4) (din.get! UInt64 5) (din.get! UInt64 6) (din.get! UInt64 7))
-    let dout := dout.set! 1 (rot_8_64 (din.get! UInt64 1) (din.get! UInt64 2) (din.get! UInt64 3) (din.get! UInt64 4) (din.get! UInt64 5) (din.get! UInt64 6) (din.get! UInt64 7) (dout.get! UInt64 0))
-    let dout := dout.set! 2 (rot_8_64 (din.get! UInt64 2) (din.get! UInt64 3) (din.get! UInt64 4) (din.get! UInt64 5) (din.get! UInt64 6) (din.get! UInt64 7) (dout.get! UInt64 0) (dout.get! UInt64 1))
-    let dout := dout.set! 3 (rot_8_64 (din.get! UInt64 3) (din.get! UInt64 4) (din.get! UInt64 5) (din.get! UInt64 6) (din.get! UInt64 7) (dout.get! UInt64 0) (dout.get! UInt64 1) (dout.get! UInt64 2))
-    let dout := dout.set! 4 (rot_8_64 (din.get! UInt64 4) (din.get! UInt64 5) (din.get! UInt64 6) (din.get! UInt64 7) (dout.get! UInt64 0) (dout.get! UInt64 1) (dout.get! UInt64 2) (dout.get! UInt64 3))
-    let dout := dout.set! 5 (rot_8_64 (din.get! UInt64 5) (din.get! UInt64 6) (din.get! UInt64 7) (dout.get! UInt64 0) (dout.get! UInt64 1) (dout.get! UInt64 2) (dout.get! UInt64 3) (dout.get! UInt64 4))
-    let dout := dout.set! 6 (rot_8_64 (din.get! UInt64 6) (din.get! UInt64 7) (dout.get! UInt64 0) (dout.get! UInt64 1) (dout.get! UInt64 2) (dout.get! UInt64 3) (dout.get! UInt64 4) (dout.get! UInt64 5))
-    let dout := dout.set! 7 (rot_8_64 (din.get! UInt64 7) (dout.get! UInt64 0) (dout.get! UInt64 1) (dout.get! UInt64 2) (dout.get! UInt64 3) (dout.get! UInt64 4) (dout.get! UInt64 5) (dout.get! UInt64 6))
-    dout
+/-! ### Round operations -/
 
--- def linOp (d: Subarray2 UInt8) (r: Subarray2 UInt8) (blocklen: Nat) :=
---     match blocklen with
---     | 16 => lin344 d r
---     | 32 => lin384 d r
---     | 64 => lin388 d r
---     | _ => sorry
+def load32 (b : Array UInt8) (i : Nat) : UInt32 :=
+  (b[4 * i]!).toUInt32 ||| ((b[4 * i + 1]!).toUInt32 <<< 8) |||
+  ((b[4 * i + 2]!).toUInt32 <<< 16) ||| ((b[4 * i + 3]!).toUInt32 <<< 24)
+
+def load64 (b : Array UInt8) (i : Nat) : UInt64 :=
+  (load32 b (2 * i)).toUInt64 ||| ((load32 b (2 * i + 1)).toUInt64 <<< 32)
+
+def bytes32 (w : Array UInt32) : Array UInt8 :=
+  w.concatMap fun (x : UInt32) => #[x.toUInt8, (x >>> 8).toUInt8, (x >>> 16).toUInt8, (x >>> 24).toUInt8]
+
+def bytes64 (w : Array UInt64) : Array UInt8 :=
+  bytes32 (w.concatMap fun (x : UInt64) => #[x.toUInt32, (x >>> 32).toUInt32])
+
+/-- Formula (1) (or (2) when `inverse`): for i = 0..n-1 (n-1..0),
+    Word_i ^= XOR_{j=1}^{n-1} (Word_{(i+j) mod n} <<< C_{j-1}). -/
+def mixWords {α : Type} [Xor α] [Inhabited α] (rot : α → Nat → α) (w : Array α) (c : Array Nat) (inverse : Bool) : Array α := Id.run do
+  let n := w.size
+  let mut w := w
+  for k in [0:n] do
+    let i := if inverse then n - 1 - k else k
+    let mut x := w[i]!
+    for j in [1:n] do
+      x := x ^^^ rot w[(i + j) % n]! c[j - 1]!
+    w := w.set! i x
+  return w
+
+/-- The linear transform L (or L^-1) on a block of 16, 32 or 64 bytes. -/
+def linear (b : Array UInt8) (inverse : Bool := false) : Array UInt8 :=
+  match b.size with
+  | 16 => bytes32 (mixWords rotl32 ((List.range 4).toArray.map (load32 b)) c0 inverse)
+  | 32 => bytes32 (mixWords rotl32 ((List.range 8).toArray.map (load32 b)) c1 inverse)
+  | 64 => bytes64 (mixWords rotl64 ((List.range 8).toArray.map (load64 b)) c2 inverse)
+  | _ => b
+
+def subBytes (b : Array UInt8) : Array UInt8 := b.map sbox
+def invSubBytes (b : Array UInt8) : Array UInt8 := b.map invSbox
+
+def xorBytes (a b : Array UInt8) : Array UInt8 :=
+  (List.range a.size).toArray.map fun i => a[i]! ^^^ b[i]!
+
+/-- a + k modulo 2^(8*size), byte 0 least significant (K^start, K^fin). -/
+def addMod (a k : Array UInt8) : Array UInt8 := Id.run do
+  let mut out : Array UInt8 := Array.mkEmpty a.size
+  let mut carry := 0
+  for i in [0:a.size] do
+    let s := a[i]!.toNat + k[i]!.toNat + carry
+    out := out.push (UInt8.ofNat s)
+    carry := s / 256
+  return out
+
+/-- a - k modulo 2^(8*size), byte 0 least significant. -/
+def subMod (a k : Array UInt8) : Array UInt8 := Id.run do
+  let mut out : Array UInt8 := Array.mkEmpty a.size
+  let mut borrow := 0
+  for i in [0:a.size] do
+    let d := a[i]!.toNat + 256 - k[i]!.toNat - borrow
+    out := out.push (UInt8.ofNat d)
+    borrow := if d < 256 then 1 else 0
+  return out
+
+def roundKey (rk : Array UInt8) (blen i : Nat) : Array UInt8 := rk.extract (i * blen) ((i + 1) * blen)
+
+/-! ### Cipher (section 9) -/
+
+structure Cipher where
+  klen : Nat
+  blen : Nat
+  rk : Array UInt8
+
+/-- `none` unless the key is 32..128 bytes (step 16) and the block 16, 32 or 64 bytes. -/
+def Cipher.new? (key : Array UInt8) (blen : Nat) : Option Cipher :=
+  if validParams key.size blen then some { klen := key.size, blen, rk := kexp key blen } else none
+
+def Cipher.rounds (c : Cipher) : Nat := RNDS c.klen
+
+/-- Encryption: K^start ⊞, S, L; XSL with K_1..K_{N-2}; K^fin ⊞. -/
+def Cipher.encrypt (c : Cipher) (pt : Array UInt8) : Array UInt8 := Id.run do
+  let n := c.rounds
+  let mut s := linear (subBytes (addMod pt (roundKey c.rk c.blen 0)))
+  for i in [1:n - 1] do
+    s := linear (subBytes (xorBytes s (roundKey c.rk c.blen i)))
+  return addMod s (roundKey c.rk c.blen (n - 1))
+
+def Cipher.decrypt (c : Cipher) (ct : Array UInt8) : Array UInt8 := Id.run do
+  let n := c.rounds
+  let mut s := subMod ct (roundKey c.rk c.blen (n - 1))
+  for k in [1:n - 1] do
+    let i := n - 1 - k -- N-2 down to 1
+    s := xorBytes (invSubBytes (linear s (inverse := true))) (roundKey c.rk c.blen i)
+  return subMod (invSubBytes (linear s (inverse := true))) (roundKey c.rk c.blen 0)

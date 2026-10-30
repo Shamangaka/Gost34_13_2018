@@ -1,4 +1,9 @@
 #include "Qalqan.h"
+#include <cassert>
+
+// S (Table 1) and S^-1 (Table 3). The printed tables have three typos each
+// ("de", "ce", "1e" for dc, cc, 1c at S(3c), S(48), S(f5) and S^-1(11),
+// S^-1(af), S^-1(9f)); these arrays hold the correct values, as in Appendix B.
 uint8_t sb[256] = { /* ded: OK, dif: 4, dip: 7, lin: 32, pow: 7, cor: 0, dst: 112, sac: 116..140, cyc: 256 */
 0xd1, 0xb5, 0xa6, 0x74, 0x2f, 0xb2, 0x03, 0x77, 0xae, 0xb3, 0x60, 0x95, 0xfd, 0xf8, 0xc7, 0xf0,
 0x2b, 0xce, 0xa5, 0x91, 0x4c, 0x6f, 0xf3, 0x4f, 0x82, 0x01, 0x45, 0x76, 0x9f, 0xed, 0x41, 0xfb,
@@ -38,8 +43,16 @@ const int c0[3] = { 1, 17, 14 };
 const int c1[7] = { 3, 5, 11, 21, 16, 30, 19 };
 const int c2[7] = { 4, 0, 22, 27, 47, 4, 61 };
 
-void Kexp(uint8_t* key, int klen, int blen, uint8_t* rkey)
+bool ValidParams(int klen, int blen)
 {
+    return klen >= MINKEYLEN && klen <= MAXKEYLEN && klen % KEYLENSTEP == 0 &&
+        (blen == 16 || blen == 32 || blen == 64);
+}
+
+bool Kexp(const uint8_t* key, int klen, int blen, uint8_t* rkey)
+{
+    if (!ValidParams(klen, blen))
+        return false;
     uint8_t r0[17], r1[15];
     int addk = klen - 32, step = 0, s = SHIFT;
     for (int i = 0; i < 15; i++)
@@ -79,6 +92,10 @@ void Kexp(uint8_t* key, int klen, int blen, uint8_t* rkey)
         }
         s = 0;
     }
+    // Do not leave key-dependent register contents on the stack.
+    volatile uint8_t* w0 = r0; for (int i = 0; i < 17; i++) w0[i] = 0;
+    volatile uint8_t* w1 = r1; for (int i = 0; i < 15; i++) w1[i] = 0;
+    return true;
 }
 
 void lin344(uint32_t* din, uint32_t* dout)
@@ -113,32 +130,70 @@ void lin388(uint64_t* din, uint64_t* dout)
     dout[7] = din[7] ^ ROTL64(dout[0], c2[0]) ^ ROTL64(dout[1], c2[1]) ^ ROTL64(dout[2], c2[2]) ^ ROTL64(dout[3], c2[3]) ^ ROTL64(dout[4], c2[4]) ^ ROTL64(dout[5], c2[5]) ^ ROTL64(dout[6], c2[6]);
 }
 
-void linOp(void* d, void* r, int blocklen)
+// Words are little-endian regardless of the host (Appendix A). The reference
+// code cast uint8_t* to uint32_t*/uint64_t*, which breaks strict aliasing and
+// gives different results on big-endian machines.
+static inline uint32_t ld32(const uint8_t* p)
+{
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+static inline uint64_t ld64(const uint8_t* p)
+{
+    return (uint64_t)ld32(p) | (uint64_t)ld32(p + 4) << 32;
+}
+static inline void st32(uint8_t* p, uint32_t v)
+{
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+static inline void st64(uint8_t* p, uint64_t v)
+{
+    st32(p, (uint32_t)v); st32(p + 4, (uint32_t)(v >> 32));
+}
+
+// Loads N little-endian words, applies f, stores the result.
+template <typename W, int N>
+static void applyLin(const uint8_t* d, uint8_t* r, void (*f)(W*, W*))
+{
+    W din[N], dout[N];
+    for (int i = 0; i < N; i++)
+    {
+        if constexpr (sizeof(W) == 4) din[i] = ld32(d + 4 * i);
+        else din[i] = ld64(d + 8 * i);
+    }
+    f(din, dout);
+    for (int i = 0; i < N; i++)
+    {
+        if constexpr (sizeof(W) == 4) st32(r + 4 * i, dout[i]);
+        else st64(r + 8 * i, dout[i]);
+    }
+}
+
+void linOp(const uint8_t* d, uint8_t* r, int blocklen)
 {
     switch (blocklen)
     {
-    case 16: lin344((uint32_t*)d, (uint32_t*)r); break;
-    case 32: lin384((uint32_t*)d, (uint32_t*)r); break;
-    case 64: lin388((uint64_t*)d, (uint64_t*)r); break;
+    case 16: applyLin<uint32_t, 4>(d, r, lin344); break;
+    case 32: applyLin<uint32_t, 8>(d, r, lin384); break;
+    case 64: applyLin<uint64_t, 8>(d, r, lin388); break;
     default:
         assert(0);
         break;
     }
 }
 
-void sBox(uint8_t* data, uint8_t* res, int blen)
+void sBox(const uint8_t* data, uint8_t* res, int blen)
 {
     for (int i = 0; i < blen; i++)
         res[i] = sb[data[i]];
 }
 
-void AddRkX(uint8_t* block, uint8_t* rkey, int nr, int blen, uint8_t* res)
+void AddRkX(const uint8_t* block, const uint8_t* rkey, int nr, int blen, uint8_t* res)
 {
     for (int i = 0; i < blen; i++)
         res[i] = block[i] ^ rkey[nr * blen + i];
 }
 
-void AddRk(uint8_t* block, uint8_t* rkey, int nr, int blen, uint8_t* res)
+void AddRk(const uint8_t* block, const uint8_t* rkey, int nr, int blen, uint8_t* res)
 {
     uint16_t tmp = block[0] + rkey[blen * nr];
     res[0] = (uint8_t)tmp;
@@ -151,8 +206,10 @@ void AddRk(uint8_t* block, uint8_t* rkey, int nr, int blen, uint8_t* res)
     }
 }
 
-void encrypt(uint8_t* data, uint8_t* rkey, int klen, int blen, uint8_t* res)
+bool encrypt(const uint8_t* data, const uint8_t* rkey, int klen, int blen, uint8_t* res)
 {
+    if (!ValidParams(klen, blen))
+        return false;
     uint8_t block[MAXBLOCKLEN] = { 0 }, block2[MAXBLOCKLEN] = { 0 };
     AddRk(data, rkey, 0, blen, block);
     sBox(block, block2, blen);
@@ -164,18 +221,18 @@ void encrypt(uint8_t* data, uint8_t* rkey, int klen, int blen, uint8_t* res)
         linOp(block2, block, blen);
     }
     AddRk(block, rkey, RNDS(klen) - 1, blen, res);
+    return true;
 }
 
-void InvAddRk(uint8_t* block, uint8_t* rkey, int nr, int blen, uint8_t* res)
+// Subtraction modulo 2^(8*blen), byte 0 least significant.
+void InvAddRk(const uint8_t* block, const uint8_t* rkey, int nr, int blen, uint8_t* res)
 {
-    int tmp = block[0] - rkey[blen * nr];
-    res[0] = (uint8_t)tmp;
-    tmp >>= 8;
-    for (int i = 1; i < blen; i++)
+    unsigned borrow = 0;
+    for (int i = 0; i < blen; i++)
     {
-        tmp += block[i] - rkey[blen * nr + i];
-        res[i] = (uint8_t)tmp;
-        tmp >>= 8;
+        unsigned d = (unsigned)block[i] - rkey[blen * nr + i] - borrow;
+        res[i] = (uint8_t)d;
+        borrow = (d >> 8) & 1;
     }
 }
 
@@ -211,27 +268,29 @@ void ilin388(uint64_t* din, uint64_t* dout)
     dout[0] = din[0] ^ ROTL64(dout[1], c2[0]) ^ ROTL64(dout[2], c2[1]) ^ ROTL64(dout[3], c2[2]) ^ ROTL64(dout[4], c2[3]) ^ ROTL64(dout[5], c2[4]) ^ ROTL64(dout[6], c2[5]) ^ ROTL64(dout[7], c2[6]);
 }
 
-void InvlinOp(void* d, void* r, int blocklen)
+void InvlinOp(const uint8_t* d, uint8_t* r, int blocklen)
 {
     switch (blocklen)
     {
-    case 16: ilin344((uint32_t*)d, (uint32_t*)r); break;
-    case 32: ilin384((uint32_t*)d, (uint32_t*)r); break;
-    case 64: ilin388((uint64_t*)d, (uint64_t*)r); break;
+    case 16: applyLin<uint32_t, 4>(d, r, ilin344); break;
+    case 32: applyLin<uint32_t, 8>(d, r, ilin384); break;
+    case 64: applyLin<uint64_t, 8>(d, r, ilin388); break;
     default:
         assert(0);
         break;
     }
 }
 
-void InvsBox(uint8_t* data, uint8_t* res, int blen)  // 32 ops
+void InvsBox(const uint8_t* data, uint8_t* res, int blen)
 {
     for (int i = 0; i < blen; i++)
         res[i] = isb[data[i]];
 }
 
-void decrypt(uint8_t* data, uint8_t* rkey, int klen, int blen, uint8_t* res)
+bool decrypt(const uint8_t* data, const uint8_t* rkey, int klen, int blen, uint8_t* res)
 {
+    if (!ValidParams(klen, blen))
+        return false;
     uint8_t block[MAXBLOCKLEN] = { 0 }, block2[MAXBLOCKLEN] = { 0 };
     InvAddRk(data, rkey, RNDS(klen) - 1, blen, block);
     for (int i = RNDS(klen) - 2; i > 0; i--)
@@ -243,4 +302,5 @@ void decrypt(uint8_t* data, uint8_t* rkey, int klen, int blen, uint8_t* res)
     InvlinOp(block, block2, blen);
     InvsBox(block2, block2, blen);
     InvAddRk(block2, rkey, 0, blen, res);
+    return true;
 }
