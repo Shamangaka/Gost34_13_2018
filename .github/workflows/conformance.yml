@@ -1,0 +1,82 @@
+name: СТ РК 4009-2025 conformance
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cpp:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - cxx: g++
+            flags: ""
+          - cxx: clang++
+            flags: ""
+          - cxx: g++
+            flags: "-fsanitize=address,undefined -fno-sanitize-recover=all"
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libgtest-dev
+      - run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DCMAKE_CXX_FLAGS="${{ matrix.flags }}" -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.flags }}"
+      - run: cmake --build build -j
+      - run: ctest --test-dir build --output-on-failure
+
+  go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: GostGolang
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: GostGolang/go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: GostRust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p gost
+      - run: cargo test -p gost --release
+
+  dotnet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet run --project GostCsharp -c Release -- --selftest
+      - run: dotnet run --project GostFSharp -c Release -- --selftest
+
+  lean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: GostLean
+      - run: lake exe gostlean --selftest
+        working-directory: GostLean
+
+  fstar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          curl -sSL -o fstar.tar.gz https://github.com/FStarLang/FStar/releases/download/v2025.03.25/fstar-v2025.03.25-Linux-x86_64.tar.gz
+          tar xzf fstar.tar.gz
+          echo "$PWD/fstar/bin" >> "$GITHUB_PATH"
+      - run: GostFStar/verify.sh
