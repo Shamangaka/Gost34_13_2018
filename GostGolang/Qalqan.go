@@ -1,9 +1,13 @@
 package main
 
 import (
-	"reflect"
-	"unsafe"
+	"encoding/binary"
+	"errors"
+	"math/bits"
 )
+
+// The sb/isb arrays hold the correct S and S^-1. Tables 1 and 3 of
+// СТ РК 4009-2025 misprint three cells each (de, ce, 1e for dc, cc, 1c).
 
 var sb = [256]uint8{ /* ded: OK, dif: 4, dip: 7, lin: 32, pow: 7, cor: 0, dst: 112, sac: 116..140, cyc: 256 */
 	0xd1, 0xb5, 0xa6, 0x74, 0x2f, 0xb2, 0x03, 0x77, 0xae, 0xb3, 0x60, 0x95, 0xfd, 0xf8, 0xc7, 0xf0,
@@ -55,15 +59,27 @@ func RNDS(x int) int {
 	return (16 + (x-32)/16)
 }
 func ROTL(x uint32, s int) uint32 {
-	return ((x << s) | (x >> (32 - s)))
+	return bits.RotateLeft32(x, s)
 }
 func ROTL64(x uint64, s int) uint64 {
-	return ((x << s) | (x >> (64 - s)))
+	return bits.RotateLeft64(x, s)
 }
 
-func Kexp(key []uint8, klen int, blen int, rkey []uint8) {
-	var r0 = make([]uint8, 17)
-	var r1 = make([]uint8, 15)
+var errParams = errors.New("qalqan: key must be 32..128 bytes in steps of 16, block 16, 32 or 64 bytes")
+
+// validParams checks the key and block lengths (in bytes) of section 5.
+func validParams(klen, blen int) bool {
+	return klen >= MINKEYLEN && klen <= MAXKEYLEN && klen%KEYLENSTEP == 0 &&
+		(blen == 16 || blen == 32 || blen == 64)
+}
+
+// Kexp expands key into RNDS(klen) round keys of blen bytes (section 8).
+func Kexp(key []uint8, klen int, blen int, rkey []uint8) error {
+	if !validParams(klen, blen) || len(key) < klen || len(rkey) < RNDS(klen)*blen {
+		return errParams
+	}
+	var r0 [17]uint8
+	var r1 [15]uint8
 	var addk = klen - 32
 	var step = 0
 	var s = SHIFT
@@ -100,6 +116,9 @@ func Kexp(key []uint8, klen int, blen int, rkey []uint8) {
 		}
 		s = 0
 	}
+	clear(r0[:])
+	clear(r1[:])
+	return nil
 }
 
 func lin344(din []uint32, dout []uint32) {
@@ -131,44 +150,51 @@ func lin388(din []uint64, dout []uint64) {
 	dout[7] = din[7] ^ ROTL64(dout[0], c2[0]) ^ ROTL64(dout[1], c2[1]) ^ ROTL64(dout[2], c2[2]) ^ ROTL64(dout[3], c2[3]) ^ ROTL64(dout[4], c2[4]) ^ ROTL64(dout[5], c2[5]) ^ ROTL64(dout[6], c2[6])
 }
 
-func toUint32Slice(d []uint8) []uint32 {
-	//return unsafe.Slice((*uint32)(unsafe.SliceData(d)), len(d)/4)
-	header := *(*reflect.SliceHeader)(unsafe.Pointer(&d))
-
-	// The length and capacity of the slice are different.
-	header.Len /= 4
-	header.Cap /= 4
-
-	// Convert slice header to an []int32
-	return *(*[]uint32)(unsafe.Pointer(&header))
-}
-
-func toUint64Slice(d []uint8) []uint64 {
-	//return unsafe.Slice(unsafe.SliceData(d), len(d)/8)
-	header := *(*reflect.SliceHeader)(unsafe.Pointer(&d))
-
-	// The length and capacity of the slice are different.
-	header.Len /= 8
-	header.Cap /= 8
-
-	// Convert slice header to an []int32
-	return *(*[]uint64)(unsafe.Pointer(&header))
-}
-
+// linOp applies L (formula (1)) to little-endian words, as Appendix A
+// requires; the result does not depend on the host byte order.
 func linOp(d []uint8, r []uint8, blocklen int) {
-	switch {
-	case blocklen == 16:
-		lin344(toUint32Slice(d), toUint32Slice(r))
-		break
-	case blocklen == 32:
-		lin384(toUint32Slice(d), toUint32Slice(r))
-		break
-	case blocklen == 64:
-		lin388(toUint64Slice(d), toUint64Slice(r))
-		break
-		// default:
-		// 	Assert(false, "")
-		// 	break
+	switch blocklen {
+	case 16:
+		var din, dout [4]uint32
+		load32(din[:], d)
+		lin344(din[:], dout[:])
+		store32(r, dout[:])
+	case 32:
+		var din, dout [8]uint32
+		load32(din[:], d)
+		lin384(din[:], dout[:])
+		store32(r, dout[:])
+	case 64:
+		var din, dout [8]uint64
+		load64(din[:], d)
+		lin388(din[:], dout[:])
+		store64(r, dout[:])
+	default:
+		panic("qalqan: bad block length")
+	}
+}
+
+func load32(w []uint32, b []uint8) {
+	for i := range w {
+		w[i] = binary.LittleEndian.Uint32(b[4*i:])
+	}
+}
+
+func store32(b []uint8, w []uint32) {
+	for i := range w {
+		binary.LittleEndian.PutUint32(b[4*i:], w[i])
+	}
+}
+
+func load64(w []uint64, b []uint8) {
+	for i := range w {
+		w[i] = binary.LittleEndian.Uint64(b[8*i:])
+	}
+}
+
+func store64(b []uint8, w []uint64) {
+	for i := range w {
+		binary.LittleEndian.PutUint64(b[8*i:], w[i])
 	}
 }
 
@@ -194,9 +220,14 @@ func AddRk(block []uint8, rkey []uint8, nr int, blen int, res []uint8) {
 		tmp >>= 8
 	}
 }
-func encrypt(data []uint8, rkey []uint8, klen int, blen int, res []uint8) {
-	var block = make([]uint8, MAXBLOCKLEN)
-	var block2 = make([]uint8, MAXBLOCKLEN)
+
+// encrypt implements section 9.1 with N = RNDS(klen) round keys.
+func encrypt(data []uint8, rkey []uint8, klen int, blen int, res []uint8) error {
+	if !validParams(klen, blen) || len(data) < blen || len(res) < blen || len(rkey) < RNDS(klen)*blen {
+		return errParams
+	}
+	var b1, b2 [MAXBLOCKLEN]uint8
+	block, block2 := b1[:blen], b2[:blen]
 	AddRk(data, rkey, 0, blen, block)
 	sBox(block, block2, blen)
 	linOp(block2, block, blen)
@@ -206,16 +237,18 @@ func encrypt(data []uint8, rkey []uint8, klen int, blen int, res []uint8) {
 		linOp(block2, block, blen)
 	}
 	AddRk(block, rkey, RNDS(klen)-1, blen, res)
+	return nil
 }
 
+// InvAddRk subtracts round key nr modulo 2^(8*blen), byte 0 least
+// significant. (The previous version kept the borrow as 0x00FF after a
+// logical shift of a uint16, so every decryption came out wrong.)
 func InvAddRk(block []uint8, rkey []uint8, nr int, blen int, res []uint8) {
-	tmp := uint16(block[0]) - uint16(rkey[blen*nr])
-	res[0] = uint8(tmp)
-	tmp >>= 8
-	for i := 1; i < blen; i++ {
-		tmp += uint16(block[i]) - uint16(rkey[blen*nr+i])
-		res[i] = uint8(tmp)
-		tmp >>= 8
+	var borrow uint16
+	for i := 0; i < blen; i++ {
+		d := uint16(block[i]) - uint16(rkey[blen*nr+i]) - borrow
+		res[i] = uint8(d)
+		borrow = (d >> 8) & 1
 	}
 }
 
@@ -249,19 +282,24 @@ func ilin388(din []uint64, dout []uint64) {
 }
 
 func InvlinOp(d []uint8, r []uint8, blocklen int) {
-	switch {
-	case blocklen == 16:
-		ilin344(toUint32Slice(d), toUint32Slice(r))
-		break
-	case blocklen == 32:
-		ilin384(toUint32Slice(d), toUint32Slice(r))
-		break
-	case blocklen == 64:
-		ilin388(toUint64Slice(d), toUint64Slice(r))
-		break
-		// default:
-		// 	Assert(false, "")
-		// 	break
+	switch blocklen {
+	case 16:
+		var din, dout [4]uint32
+		load32(din[:], d)
+		ilin344(din[:], dout[:])
+		store32(r, dout[:])
+	case 32:
+		var din, dout [8]uint32
+		load32(din[:], d)
+		ilin384(din[:], dout[:])
+		store32(r, dout[:])
+	case 64:
+		var din, dout [8]uint64
+		load64(din[:], d)
+		ilin388(din[:], dout[:])
+		store64(r, dout[:])
+	default:
+		panic("qalqan: bad block length")
 	}
 }
 
@@ -270,9 +308,14 @@ func InvsBox(data []uint8, res []uint8, blen int) {
 		res[i] = isb[data[i]]
 	}
 }
-func decrypt(data []uint8, rkey []uint8, klen int, blen int, res []uint8) {
-	var block = make([]uint8, MAXBLOCKLEN)
-	var block2 = make([]uint8, MAXBLOCKLEN)
+
+// decrypt implements section 9.2.
+func decrypt(data []uint8, rkey []uint8, klen int, blen int, res []uint8) error {
+	if !validParams(klen, blen) || len(data) < blen || len(res) < blen || len(rkey) < RNDS(klen)*blen {
+		return errParams
+	}
+	var b1, b2 [MAXBLOCKLEN]uint8
+	block, block2 := b1[:blen], b2[:blen]
 	InvAddRk(data, rkey, RNDS(klen)-1, blen, block)
 	for i := RNDS(klen) - 2; i > 0; i-- {
 		InvlinOp(block, block2, blen)
@@ -282,4 +325,44 @@ func decrypt(data []uint8, rkey []uint8, klen int, blen int, res []uint8) {
 	InvlinOp(block, block2, blen)
 	InvsBox(block2, block2, blen)
 	InvAddRk(block2, rkey, 0, blen, res)
+	return nil
 }
+
+// Cipher is an expanded key for one block length. It implements
+// crypto/cipher.Block, so the modes in modes.go (and those of crypto/cipher)
+// can use it.
+type Cipher struct {
+	klen, blen int
+	rkey       []uint8
+}
+
+// NewCipher expands key (32..128 bytes, step 16) for a 16-, 32- or 64-byte block.
+func NewCipher(key []uint8, blockSize int) (*Cipher, error) {
+	if !validParams(len(key), blockSize) {
+		return nil, errParams
+	}
+	c := &Cipher{klen: len(key), blen: blockSize, rkey: make([]uint8, RNDS(len(key))*blockSize)}
+	if err := Kexp(key, c.klen, c.blen, c.rkey); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (c *Cipher) BlockSize() int { return c.blen }
+
+// Encrypt encrypts one block; dst and src may be the same slice.
+func (c *Cipher) Encrypt(dst, src []byte) {
+	if err := encrypt(src, c.rkey, c.klen, c.blen, dst); err != nil {
+		panic("qalqan: input or output not a full block")
+	}
+}
+
+// Decrypt decrypts one block; dst and src may be the same slice.
+func (c *Cipher) Decrypt(dst, src []byte) {
+	if err := decrypt(src, c.rkey, c.klen, c.blen, dst); err != nil {
+		panic("qalqan: input or output not a full block")
+	}
+}
+
+// Reset wipes the round keys (best effort: the Go runtime may hold copies).
+func (c *Cipher) Reset() { clear(c.rkey) }
