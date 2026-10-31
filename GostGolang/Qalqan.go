@@ -334,6 +334,7 @@ func decrypt(data []uint8, rkey []uint8, klen int, blen int, res []uint8) error 
 type Cipher struct {
 	klen, blen int
 	rkey       []uint8
+	closed     bool
 }
 
 // NewCipher expands key (32..128 bytes, step 16) for a 16-, 32- or 64-byte block.
@@ -351,18 +352,30 @@ func NewCipher(key []uint8, blockSize int) (*Cipher, error) {
 func (c *Cipher) BlockSize() int { return c.blen }
 
 // Encrypt encrypts one block; dst and src may be the same slice.
+// Panics if Reset has been called. This is a research-only block primitive.
 func (c *Cipher) Encrypt(dst, src []byte) {
+	if c.closed {
+		panic("qalqan: cipher used after Reset")
+	}
 	if err := encrypt(src, c.rkey, c.klen, c.blen, dst); err != nil {
 		panic("qalqan: input or output not a full block")
 	}
 }
 
 // Decrypt decrypts one block; dst and src may be the same slice.
+// Panics if Reset has been called.
 func (c *Cipher) Decrypt(dst, src []byte) {
+	if c.closed {
+		panic("qalqan: cipher used after Reset")
+	}
 	if err := decrypt(src, c.rkey, c.klen, c.blen, dst); err != nil {
 		panic("qalqan: input or output not a full block")
 	}
 }
 
-// Reset wipes the round keys (best effort: the Go runtime may hold copies).
-func (c *Cipher) Reset() { clear(c.rkey) }
+// Reset wipes the round keys (best effort: the Go runtime may hold copies)
+// and permanently disables this cipher instance. Reset is idempotent.
+func (c *Cipher) Reset() {
+	clear(c.rkey)
+	c.closed = true
+}

@@ -1,4 +1,4 @@
-#include "Qalqan.h"
+#include "QalqanInternal.h"
 
 static uint32_t x = 1;
 

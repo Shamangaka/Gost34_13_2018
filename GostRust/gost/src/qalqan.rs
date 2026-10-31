@@ -55,6 +55,119 @@ const C0: [u32; 3] = [1, 17, 14];
 const C1: [u32; 7] = [3, 5, 11, 21, 16, 30, 19];
 const C2: [u32; 7] = [4, 0, 22, 27, 47, 4, 61];
 
+// RESEARCH ONLY: v8 fixed-immediate bitplane Boolean multiplexer.
+/// RESEARCH ONLY: Boolean selection of compile-time integer constants.
+/// No runtime table indexed by the secret input; audit optimized assembly.
+#[inline(never)]
+fn sub_byte_ct(input: u8) -> u8 {
+    let shift: u32 = (input & 63) as u32;
+    let h0: u64 = ((input >> 6) & 1) as u64;
+    let h1: u64 = ((input >> 7) & 1) as u64;
+    let m0: u64 = (1 ^ h0) & (1 ^ h1);
+    let m1: u64 = h0 & (1 ^ h1);
+    let m2: u64 = (1 ^ h0) & h1;
+    let m3: u64 = h0 & h1;
+    let mut out: u8 = 0;
+    let t0_0: u64 = (0x6e827970f6ed5ad3u64 >> shift) & m0;
+    let t0_1: u64 = (0xc8b6a15f400e8af2u64 >> shift) & m1;
+    let t0_2: u64 = (0xfa3cc2ccc57fba15u64 >> shift) & m2;
+    let t0_3: u64 = (0x255d24069394d394u64 >> shift) & m3;
+    out |= ((t0_0 | t0_1 | t0_2 | t0_3) as u8) << 0;
+    let t1_0: u64 = (0x2d58cf9699e343f4u64 >> shift) & m0;
+    let t1_1: u64 = (0x491d491807fb8055u64 >> shift) & m1;
+    let t1_2: u64 = (0x131b67f9b3cda8beu64 >> shift) & m2;
+    let t1_3: u64 = (0xcdd6e4b880087787u64 >> shift) & m3;
+    out |= ((t1_0 | t1_1 | t1_2 | t1_3) as u8) << 1;
+    let t2_0: u64 = (0x97943d0f3cb6599eu64 >> shift) & m0;
+    let t2_1: u64 = (0xbea400f355bd5b06u64 >> shift) & m1;
+    let t2_2: u64 = (0x835bd964108f4444u64 >> shift) & m2;
+    let t2_3: u64 = (0x7fb5a78ca9143759u64 >> shift) & m3;
+    out |= ((t2_0 | t2_1 | t2_2 | t2_3) as u8) << 2;
+    let t3_0: u64 = (0x36b545b7b0b33110u64 >> shift) & m0;
+    let t3_1: u64 = (0x7ef2f64c23548347u64 >> shift) & m1;
+    let t3_2: u64 = (0x6838967e5f3960e9u64 >> shift) & m2;
+    let t3_3: u64 = (0xc23adc2d4a1615bfu64 >> shift) & m3;
+    out |= ((t3_0 | t3_1 | t3_2 | t3_3) as u8) << 3;
+    let t4_0: u64 = (0x1315e1e49848baabu64 >> shift) & m0;
+    let t4_1: u64 = (0x7b1c79887b910a76u64 >> shift) & m1;
+    let t4_2: u64 = (0xdfc4f45c675f4b14u64 >> shift) & m2;
+    let t4_3: u64 = (0xd8396199f037a961u64 >> shift) & m3;
+    out |= ((t4_0 | t4_1 | t4_2 | t4_3) as u8) << 4;
+    let t5_0: u64 = (0x292f2af1a865b7beu64 >> shift) & m0;
+    let t5_1: u64 = (0x3a6a38e605114069u64 >> shift) & m1;
+    let t5_2: u64 = (0x00abcc7f351e9a1bu64 >> shift) & m2;
+    let t5_3: u64 = (0x3f53cb2e8dc5daa9u64 >> shift) & m3;
+    out |= ((t5_0 | t5_1 | t5_2 | t5_3) as u8) << 5;
+    let t6_0: u64 = (0xb7b5ca76ecf2f489u64 >> shift) & m0;
+    let t6_1: u64 = (0x826dc43efe5089bau64 >> shift) & m1;
+    let t6_2: u64 = (0x408d1c91f9ff9411u64 >> shift) & m2;
+    let t6_3: u64 = (0x23d3a1f028ae2117u64 >> shift) & m3;
+    out |= ((t6_0 | t6_1 | t6_2 | t6_3) as u8) << 6;
+    let t7_0: u64 = (0x5f1e5e71b14efb27u64 >> shift) & m0;
+    let t7_1: u64 = (0x94dce226bdeb1f88u64 >> shift) & m1;
+    let t7_2: u64 = (0x1028205cc8ce758cu64 >> shift) & m2;
+    let t7_3: u64 = (0xd248cfb4c60993f5u64 >> shift) & m3;
+    out |= ((t7_0 | t7_1 | t7_2 | t7_3) as u8) << 7;
+    out
+}
+
+/// RESEARCH ONLY: Boolean selection of compile-time integer constants.
+/// No runtime table indexed by the secret input; audit optimized assembly.
+#[inline(never)]
+fn inv_sub_byte_ct(input: u8) -> u8 {
+    let shift: u32 = (input & 63) as u32;
+    let h0: u64 = ((input >> 6) & 1) as u64;
+    let h1: u64 = ((input >> 7) & 1) as u64;
+    let m0: u64 = (1 ^ h0) & (1 ^ h1);
+    let m1: u64 = h0 & (1 ^ h1);
+    let m2: u64 = (1 ^ h0) & h1;
+    let m3: u64 = h0 & h1;
+    let mut out: u8 = 0;
+    let t0_0: u64 = (0xf47f534616a00e13u64 >> shift) & m0;
+    let t0_1: u64 = (0x10d7bd3a2dd5ee58u64 >> shift) & m1;
+    let t0_2: u64 = (0x0bae0f9e26662fc8u64 >> shift) & m2;
+    let t0_3: u64 = (0x8b25f4b52161436fu64 >> shift) & m3;
+    out |= ((t0_0 | t0_1 | t0_2 | t0_3) as u8) << 0;
+    let t1_0: u64 = (0xeedd30994a31709cu64 >> shift) & m0;
+    let t1_1: u64 = (0x24d1101b4a26a97bu64 >> shift) & m1;
+    let t1_2: u64 = (0xac822d6d57f2f483u64 >> shift) & m2;
+    let t1_3: u64 = (0x988fc3c90ee98fffu64 >> shift) & m3;
+    out |= ((t1_0 | t1_1 | t1_2 | t1_3) as u8) << 1;
+    let t2_0: u64 = (0x3db0e0193832970du64 >> shift) & m0;
+    let t2_1: u64 = (0xc28fe92a12fdbadbu64 >> shift) & m1;
+    let t2_2: u64 = (0x97968a00dd5c2c72u64 >> shift) & m2;
+    let t2_3: u64 = (0x2f0b6d1a5f5c26ebu64 >> shift) & m3;
+    out |= ((t2_0 | t2_1 | t2_2 | t2_3) as u8) << 2;
+    let t3_0: u64 = (0xb3ef00b88eef4b43u64 >> shift) & m0;
+    let t3_1: u64 = (0x1c4458b916f40932u64 >> shift) & m1;
+    let t3_2: u64 = (0x569ac199f52ddb37u64 >> shift) & m2;
+    let t3_3: u64 = (0x295170c6bf3193b9u64 >> shift) & m3;
+    out |= ((t3_0 | t3_1 | t3_2 | t3_3) as u8) << 3;
+    let t4_0: u64 = (0x92400ae13ef7a286u64 >> shift) & m0;
+    let t4_1: u64 = (0xfb65fde28733b276u64 >> shift) & m1;
+    let t4_2: u64 = (0x50d1022fcf4a32ceu64 >> shift) & m2;
+    let t4_3: u64 = (0x98ecb1487399c56du64 >> shift) & m3;
+    out |= ((t4_0 | t4_1 | t4_2 | t4_3) as u8) << 4;
+    let t5_0: u64 = (0xf5f463c29bfd8bf4u64 >> shift) & m0;
+    let t5_1: u64 = (0x95212df45a8661ddu64 >> shift) & m1;
+    let t5_2: u64 = (0xbe10331e4e0cf122u64 >> shift) & m2;
+    let t5_3: u64 = (0x1656dfbc7cc48220u64 >> shift) & m3;
+    out |= ((t5_0 | t5_1 | t5_2 | t5_3) as u8) << 5;
+    let t6_0: u64 = (0xd95536bb790e61a1u64 >> shift) & m0;
+    let t6_1: u64 = (0xf02234a22df90dc5u64 >> shift) & m1;
+    let t6_2: u64 = (0x57d3a9916f50b3d9u64 >> shift) & m2;
+    let t6_3: u64 = (0x4014577985f53e27u64 >> shift) & m3;
+    out |= ((t6_0 | t6_1 | t6_2 | t6_3) as u8) << 6;
+    let t7_0: u64 = (0x62cb51ef37f3dfc0u64 >> shift) & m0;
+    let t7_1: u64 = (0xae2d56fe93d30649u64 >> shift) & m1;
+    let t7_2: u64 = (0xad93af91579d8e00u64 >> shift) & m2;
+    let t7_3: u64 = (0xc4b0d40a824c295cu64 >> shift) & m3;
+    out |= ((t7_0 | t7_1 | t7_2 | t7_3) as u8) << 7;
+    out
+}
+
+
+
 macro_rules! RNDS {
     ($x:expr) => {
         16 + ($x - 32) / 16
@@ -223,17 +336,17 @@ pub fn Kexp(key: &[u8], klen: usize, blen: usize, rkey: &mut [u8]) -> Result<(),
     let mut prerun = SHIFT as usize;
     for round in 0..RNDS!(klen) {
         for k in 0..(blen + prerun) {
-            let mut t0 = SB[r0[0] as usize]
+            let mut t0 = sub_byte_ct(r0[0])
                 .wrapping_add(r0[1])
-                .wrapping_add(SB[r0[3] as usize])
+                .wrapping_add(sub_byte_ct(r0[3]))
                 .wrapping_add(r0[7])
-                .wrapping_add(SB[r0[12] as usize])
+                .wrapping_add(sub_byte_ct(r0[12]))
                 .wrapping_add(r0[16]);
-            let mut t1 = SB[r1[0] as usize]
+            let mut t1 = sub_byte_ct(r1[0])
                 .wrapping_add(r1[3])
-                .wrapping_add(SB[r1[9] as usize])
+                .wrapping_add(sub_byte_ct(r1[9]))
                 .wrapping_add(r1[12])
-                .wrapping_add(SB[r1[14] as usize]);
+                .wrapping_add(sub_byte_ct(r1[14]));
 
             // Shift registers left by one byte: exactly the Appendix B operation.
             r0.copy_within(1..17, 0);
@@ -263,7 +376,7 @@ pub fn sBox(data: &[u8], res: &mut [u8], blen: usize) {
     assert!(data.len() >= blen, "sBox: input shorter than blen");
     assert!(res.len() >= blen, "sBox: output shorter than blen");
     for i in 0..blen {
-        res[i] = SB[data[i] as usize];
+        res[i] = sub_byte_ct(data[i]);
     }
 }
 
@@ -272,16 +385,16 @@ pub fn sBoxU(data: &[u8], res: &mut [u8], blen: usize) {
     assert!(data.len() >= blen, "sBoxU: input shorter than blen");
     assert!(res.len() >= blen, "sBoxU: output shorter than blen");
     for i in 0..blen {
-        res[i] = SB[data[i] as usize];
+        res[i] = sub_byte_ct(data[i]);
     }
 }
 
 fn sbox_in_place(b: &mut [u8]) {
-    b.iter_mut().for_each(|x| *x = SB[*x as usize]);
+    b.iter_mut().for_each(|x| *x = sub_byte_ct(*x));
 }
 
 fn inv_sbox_in_place(b: &mut [u8]) {
-    b.iter_mut().for_each(|x| *x = ISB[*x as usize]);
+    b.iter_mut().for_each(|x| *x = inv_sub_byte_ct(*x));
 }
 
 pub fn AddRkX(block: &[u8], rkey: &[u8], nr: usize, blen: usize, res: &mut [u8]) {
@@ -377,7 +490,7 @@ pub fn InvsBox(data: &[u8], res: &mut [u8], blen: usize) {
     assert!(data.len() >= blen, "InvsBox: input shorter than blen");
     assert!(res.len() >= blen, "InvsBox: output shorter than blen");
     for i in 0..blen {
-        res[i] = ISB[data[i] as usize];
+        res[i] = inv_sub_byte_ct(data[i]);
     }
 }
 
@@ -454,3 +567,30 @@ impl Cipher {
 }
 
 // Cipher.rkey is Zeroizing<Vec<u8>> and is wiped on Drop (including unwinding).
+
+
+#[cfg(test)]
+mod fixed_scan_sbox_tests {
+    use super::{sub_byte_ct, inv_sub_byte_ct, SB, ISB};
+
+    #[test]
+    fn direct_all_256_values_match_original_table() {
+        for x in 0u16..256 {
+            assert_eq!(sub_byte_ct(x as u8), SB[x as usize], "x={x:02x}");
+        }
+    }
+
+    #[test]
+    fn inverse_all_256_values_match_original_table() {
+        for x in 0u16..256 {
+            assert_eq!(inv_sub_byte_ct(x as u8), ISB[x as usize], "x={x:02x}");
+        }
+    }
+
+    #[test]
+    fn inverse_of_direct_for_every_possible_byte() {
+        for x in 0u16..256 {
+            assert_eq!(inv_sub_byte_ct(sub_byte_ct(x as u8)), x as u8);
+        }
+    }
+}

@@ -1,30 +1,42 @@
-# СТ РК 4009-2025 block cipher (Qalqan)
+# Qalqan (СТ РК 4009-2025) — исследовательские реализации
 
-Implementations of the Kazakhstan block cipher standard СТ РК 4009-2025
-«Информационные технологии. Криптографическая защита информации. Алгоритм
-блочного симметричного шифрования» and of the modes of operation of
-СТ РК ISO/IEC 10116-2019 it refers to (ECB, CBC, CFB, OFB, CTR).
+**Статус: RESEARCH ONLY. Не предназначено для промышленного криптографического применения.**
 
-Reference code from the public discussion of the draft:
+Репозиторий содержит реализации блочного симметричного шифра Qalqan, выбранную
+интерпретацию неоднозначных мест текста стандарта и экспериментальные режимы
+шифрования. Он **не** является сертифицированным СКЗИ. Корректность на тестовых
+векторах не доказывает криптографическую стойкость, отсутствие побочных каналов,
+безопасность протоколов или соответствие требованиям конкретной системы.
+
+Подробности: [CONFORMANCE.md](CONFORMANCE.md), [SECURITY.md](SECURITY.md),
+[RELEASE_NOTES_RESEARCH.md](RELEASE_NOTES_RESEARCH.md).
+
+## Реализации
+
+| Папка | Язык | Статус в финальном исследовательском аудите |
+|---|---|---|
+| `GostRust/` | Rust | Функциональная проверка, тесты API, экспериментальный S-box v8; constant-time **не доказан** |
+| `src/` | C++20 | Функциональная проверка и v20 bounds-checked public API; табличные S-box **не constant-time** |
+| `GostGolang/` | Go | Функциональная проверка и v21 hardening; табличные S-box **не constant-time** |
+| `GostCsharp/`, `GostFSharp/`, `GostLean/`, `GostFStar/` | другие | В область заключительного аудита этого релиза не входят |
+
+В C++ низкоуровневые внутренние функции с сырыми указателями остаются
+доступными в исходниках, но не входят в поддерживаемый публичный API. При
+преднамеренном вызове внутренних функций с неверными размерами память может
+использоваться небезопасно; ими нельзя обрабатывать недоверенные параметры.
+
+## Быстрая проверка
+
+```bash
+cd GostRust && cargo test --workspace --locked && cargo test --workspace --release --locked
+cd ../GostGolang && go test -count=1 ./... && go vet ./... && go test -race -count=1 ./...
+cd .. && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build && ctest --test-dir build --output-on-failure
+```
+
+Для заключительного двойного прогона GCC/Clang под ASan+UBSan, а также
+168 внешних тестовых случаев используйте пакет `STRK4009_V22_Release_Gate.zip`.
+Источник внешних 168 случаев документально не установлен; называть их
+сертифицированными или нормативно независимыми нельзя.
+
+Исходный материал обсуждения проекта стандарта:
 https://ksm.kz/public-discussion/standards/discussion-of-draft-of-st-rk/112716/
-
-| Directory | Language |
-|---|---|
-| `src/` | C++20 (the reference implementation of Appendix B, fixed) |
-| `GostCsharp/` | C# |
-| `GostFSharp/` | F# |
-| `GostGolang/` | Go |
-| `GostRust/` | Rust |
-| `GostLean/` | Lean 4 |
-| `GostFStar/` | F* (executable specification, checked by normalisation) |
-
-All of them reproduce the mandatory test vectors of Appendix A
-(`resources/gold.txt`) and the shared known answers in `resources/`. See
-[CONFORMANCE.md](CONFORMANCE.md) for the requirements, the errata in the
-printed standard, and how to run each test suite.
-
-# Interesting read.
-- https://ceurspt.wikidata.dbis.rwth-aachen.de/Vol-3187/paper19.pdf
-- https://ela.kpi.ua/server/api/core/bitstreams/856eff0d-9d31-44d8-a5bf-485dac939344/content
-- https://ouci.dntb.gov.ua/en/works/40w1egv7/
-- http://tacs.ipt.kpi.ua/article/view/274112/269340

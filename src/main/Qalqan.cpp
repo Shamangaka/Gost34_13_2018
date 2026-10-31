@@ -1,5 +1,7 @@
-#include "Qalqan.h"
+#include "QalqanInternal.h"
 #include <cassert>
+#include <stdexcept>
+#include <cstddef>
 
 // S (Table 1) and S^-1 (Table 3). The printed tables have three typos each
 // ("de", "ce", "1e" for dc, cc, 1c at S(3c), S(48), S(f5) and S^-1(11),
@@ -51,7 +53,7 @@ bool ValidParams(int klen, int blen)
 
 bool Kexp(const uint8_t* key, int klen, int blen, uint8_t* rkey)
 {
-    if (!ValidParams(klen, blen))
+    if (!ValidParams(klen, blen) || key == nullptr || rkey == nullptr)
         return false;
     uint8_t r0[17], r1[15];
     int addk = klen - 32, step = 0, s = SHIFT;
@@ -176,8 +178,7 @@ void linOp(const uint8_t* d, uint8_t* r, int blocklen)
     case 32: applyLin<uint32_t, 8>(d, r, lin384); break;
     case 64: applyLin<uint64_t, 8>(d, r, lin388); break;
     default:
-        assert(0);
-        break;
+        throw std::invalid_argument("qalqan: unsupported block size");
     }
 }
 
@@ -187,20 +188,31 @@ void sBox(const uint8_t* data, uint8_t* res, int blen)
         res[i] = sb[data[i]];
 }
 
+static size_t checkedRoundOffset(int nr, int blen)
+{
+    // These are internal helpers; the rkey allocation size remains a caller
+    // precondition, but index multiplication must never overflow signed int.
+    if ((blen != 16 && blen != 32 && blen != 64) || nr < 0 || nr >= RNDS(MAXKEYLEN))
+        throw std::invalid_argument("qalqan: invalid low-level round index or block size");
+    return static_cast<size_t>(nr) * static_cast<size_t>(blen);
+}
+
 void AddRkX(const uint8_t* block, const uint8_t* rkey, int nr, int blen, uint8_t* res)
 {
+    const size_t offset = checkedRoundOffset(nr, blen);
     for (int i = 0; i < blen; i++)
-        res[i] = block[i] ^ rkey[nr * blen + i];
+        res[i] = block[i] ^ rkey[offset + static_cast<size_t>(i)];
 }
 
 void AddRk(const uint8_t* block, const uint8_t* rkey, int nr, int blen, uint8_t* res)
 {
-    uint16_t tmp = block[0] + rkey[blen * nr];
+    const size_t offset = checkedRoundOffset(nr, blen);
+    uint16_t tmp = block[0] + rkey[offset];
     res[0] = (uint8_t)tmp;
     tmp >>= 8;
     for (int i = 1; i < blen; i++)
     {
-        tmp += block[i] + rkey[blen * nr + i];
+        tmp += block[i] + rkey[offset + i];
         res[i] = (uint8_t)tmp;
         tmp >>= 8;
     }
@@ -208,7 +220,7 @@ void AddRk(const uint8_t* block, const uint8_t* rkey, int nr, int blen, uint8_t*
 
 bool encrypt(const uint8_t* data, const uint8_t* rkey, int klen, int blen, uint8_t* res)
 {
-    if (!ValidParams(klen, blen))
+    if (!ValidParams(klen, blen) || data == nullptr || rkey == nullptr || res == nullptr)
         return false;
     uint8_t block[MAXBLOCKLEN] = { 0 }, block2[MAXBLOCKLEN] = { 0 };
     AddRk(data, rkey, 0, blen, block);
@@ -227,10 +239,11 @@ bool encrypt(const uint8_t* data, const uint8_t* rkey, int klen, int blen, uint8
 // Subtraction modulo 2^(8*blen), byte 0 least significant.
 void InvAddRk(const uint8_t* block, const uint8_t* rkey, int nr, int blen, uint8_t* res)
 {
+    const size_t offset = checkedRoundOffset(nr, blen);
     unsigned borrow = 0;
     for (int i = 0; i < blen; i++)
     {
-        unsigned d = (unsigned)block[i] - rkey[blen * nr + i] - borrow;
+        unsigned d = (unsigned)block[i] - rkey[offset + i] - borrow;
         res[i] = (uint8_t)d;
         borrow = (d >> 8) & 1;
     }
@@ -276,8 +289,7 @@ void InvlinOp(const uint8_t* d, uint8_t* r, int blocklen)
     case 32: applyLin<uint32_t, 8>(d, r, ilin384); break;
     case 64: applyLin<uint64_t, 8>(d, r, ilin388); break;
     default:
-        assert(0);
-        break;
+        throw std::invalid_argument("qalqan: unsupported block size");
     }
 }
 
@@ -289,7 +301,7 @@ void InvsBox(const uint8_t* data, uint8_t* res, int blen)
 
 bool decrypt(const uint8_t* data, const uint8_t* rkey, int klen, int blen, uint8_t* res)
 {
-    if (!ValidParams(klen, blen))
+    if (!ValidParams(klen, blen) || data == nullptr || rkey == nullptr || res == nullptr)
         return false;
     uint8_t block[MAXBLOCKLEN] = { 0 }, block2[MAXBLOCKLEN] = { 0 };
     InvAddRk(data, rkey, RNDS(klen) - 1, blen, block);

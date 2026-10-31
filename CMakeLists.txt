@@ -31,9 +31,14 @@ file(COPY resources DESTINATION ${CMAKE_BINARY_DIR})
 ###############################################################################
 
 enable_testing()
+# Bounds-checking and invalid-parameter gate requires no GoogleTest.
+add_executable(v20_cpp_safety_gate src/test/V20SafetyGate.cpp)
+target_link_libraries(v20_cpp_safety_gate PRIVATE qalqan)
+target_compile_definitions(v20_cpp_safety_gate PRIVATE QALQAN_RESOURCES="${CMAKE_SOURCE_DIR}/resources")
+add_test(NAME Qalqan.V20SafetyGate COMMAND v20_cpp_safety_gate)
 find_package(GTest)
 if(GTest_FOUND)
-  file(GLOB test_sources src/test/*.cpp)
+  file(GLOB test_sources src/test/QalqanTests.cpp)
   add_executable(unit_tests ${test_sources})
   target_link_libraries(unit_tests PRIVATE qalqan GTest::gtest_main)
   target_compile_definitions(unit_tests PRIVATE QALQAN_RESOURCES="${CMAKE_SOURCE_DIR}/resources")

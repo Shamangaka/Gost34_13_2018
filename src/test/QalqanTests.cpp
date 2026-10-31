@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "Modes.h"
-#include "Qalqan.h"
+#include "QalqanInternal.h"
 
 #ifndef QALQAN_RESOURCES
 #define QALQAN_RESOURCES "resources"
@@ -109,8 +109,8 @@ TEST(Qalqan, ReferenceKnownAnswers)
         ASSERT_TRUE(decrypt(ct.data(), rk.data(), klen, blen, back.data()));
         EXPECT_EQ(back, pt) << f[0] << "/" << f[1];
 
-        QalqanCipher c(key.data(), key.size(), pt.size());
-        c.EncryptBlock(pt.data(), out.data());
+        QalqanCipher c(key, pt.size());
+        c.EncryptBlock(pt, out);
         EXPECT_EQ(out, ct);
         n++;
     }
@@ -127,13 +127,13 @@ TEST(Qalqan, RoundTripAllSizes)
                 std::vector<uint8_t> key(klen), pt(blen), ct(blen), back(blen);
                 for (auto& b : key) b = (uint8_t)rng();
                 for (auto& b : pt) b = (uint8_t)rng();
-                QalqanCipher c(key.data(), key.size(), pt.size());
+                QalqanCipher c(key, pt.size());
                 EXPECT_EQ(c.Rounds(), 16 + (klen * 8 - 256) / 128);
-                c.EncryptBlock(pt.data(), ct.data());
-                c.DecryptBlock(ct.data(), back.data());
+                c.EncryptBlock(pt, ct);
+                c.DecryptBlock(ct, back);
                 ASSERT_EQ(back, pt) << klen << "/" << blen;
                 std::vector<uint8_t> buf = pt; // in place
-                c.EncryptBlock(buf.data(), buf.data());
+                c.EncryptBlock(buf, buf);
                 ASSERT_EQ(buf, ct);
             }
 }
@@ -163,8 +163,8 @@ TEST(Qalqan, RejectsInvalidParameters)
         EXPECT_FALSE(encrypt(blk, rk, 32, blen, blk)) << blen;
         EXPECT_FALSE(decrypt(blk, rk, 32, blen, blk)) << blen;
     }
-    EXPECT_THROW(QalqanCipher(key, 33, 16), std::invalid_argument);
-    EXPECT_THROW(QalqanCipher(key, 32, 24), std::invalid_argument);
+    EXPECT_THROW(QalqanCipher(std::span<const uint8_t>(key, 33), 16), std::invalid_argument);
+    EXPECT_THROW(QalqanCipher(std::span<const uint8_t>(key, 32), 24), std::invalid_argument);
 }
 
 TEST(Modes, KnownAnswers)
@@ -174,32 +174,32 @@ TEST(Modes, KnownAnswers)
     {
         const std::string& mode = f[0];
         auto key = Hex(f[3]), iv = Hex(f[4]), pt = Hex(f[5]), ct = Hex(f[6]);
-        QalqanCipher c(key.data(), key.size(), (size_t)std::stoi(f[2]) / 8);
+        QalqanCipher c(key, (size_t)std::stoi(f[2]) / 8);
         std::vector<uint8_t> out(pt.size()), back(pt.size());
         if (mode == "ECB")
         {
-            EcbEncrypt(c, pt.data(), out.data(), pt.size());
-            EcbDecrypt(c, ct.data(), back.data(), ct.size());
+            EcbEncrypt(c, pt, out);
+            EcbDecrypt(c, ct, back);
         }
         else if (mode == "CBC")
         {
-            CbcEncrypt(c, iv.data(), pt.data(), out.data(), pt.size());
-            CbcDecrypt(c, iv.data(), ct.data(), back.data(), ct.size());
+            CbcEncrypt(c, iv, pt, out);
+            CbcDecrypt(c, iv, ct, back);
         }
         else if (mode == "CFB")
         {
-            CfbEncrypt(c, iv.data(), pt.data(), out.data(), pt.size());
-            CfbDecrypt(c, iv.data(), ct.data(), back.data(), ct.size());
+            CfbEncrypt(c, iv, pt, out);
+            CfbDecrypt(c, iv, ct, back);
         }
         else if (mode == "OFB")
         {
-            OfbCrypt(c, iv.data(), pt.data(), out.data(), pt.size());
-            OfbCrypt(c, iv.data(), ct.data(), back.data(), ct.size());
+            OfbCrypt(c, iv, pt, out);
+            OfbCrypt(c, iv, ct, back);
         }
         else if (mode == "CTR")
         {
-            CtrCrypt(c, iv.data(), pt.data(), out.data(), pt.size());
-            CtrCrypt(c, iv.data(), ct.data(), back.data(), ct.size());
+            CtrCrypt(c, iv, pt, out);
+            CtrCrypt(c, iv, ct, back);
         }
         else
             FAIL() << "unknown mode " << mode;
@@ -218,33 +218,34 @@ TEST(Modes, InPlaceAndPartialBlocks)
         std::vector<uint8_t> key(48), iv(bs);
         for (auto& b : key) b = (uint8_t)rng();
         for (auto& b : iv) b = (uint8_t)rng();
-        QalqanCipher c(key.data(), key.size(), bs);
+        QalqanCipher c(key, bs);
         for (size_t len : {size_t(0), size_t(1), bs - 1, bs, bs + 1, 5 * bs + 3})
         {
             std::vector<uint8_t> pt(len), sep(len), buf;
             for (auto& b : pt) b = (uint8_t)rng();
-            CfbEncrypt(c, iv.data(), pt.data(), sep.data(), len);
+            CfbEncrypt(c, iv, pt, sep);
             buf = pt;
-            CfbEncrypt(c, iv.data(), buf.data(), buf.data(), len);
+            CfbEncrypt(c, iv, buf, buf);
             EXPECT_EQ(buf, sep);
-            CfbDecrypt(c, iv.data(), buf.data(), buf.data(), len);
+            CfbDecrypt(c, iv, buf, buf);
             EXPECT_EQ(buf, pt);
             buf = pt;
-            CtrCrypt(c, iv.data(), buf.data(), buf.data(), len);
-            CtrCrypt(c, iv.data(), buf.data(), buf.data(), len);
+            CtrCrypt(c, iv, buf, buf);
+            CtrCrypt(c, iv, buf, buf);
             EXPECT_EQ(buf, pt);
             buf = pt;
-            OfbCrypt(c, iv.data(), buf.data(), buf.data(), len);
-            OfbCrypt(c, iv.data(), buf.data(), buf.data(), len);
+            OfbCrypt(c, iv, buf, buf);
+            OfbCrypt(c, iv, buf, buf);
             EXPECT_EQ(buf, pt);
         }
         std::vector<uint8_t> blocks(3 * bs), buf;
         for (auto& b : blocks) b = (uint8_t)rng();
         buf = blocks;
-        CbcEncrypt(c, iv.data(), buf.data(), buf.data(), buf.size());
-        CbcDecrypt(c, iv.data(), buf.data(), buf.data(), buf.size());
+        CbcEncrypt(c, iv, buf, buf);
+        CbcDecrypt(c, iv, buf, buf);
         EXPECT_EQ(buf, blocks);
-        EXPECT_THROW(CbcEncrypt(c, iv.data(), blocks.data(), buf.data(), bs + 1), std::invalid_argument);
+        EXPECT_THROW(CbcEncrypt(c, iv, std::span<const uint8_t>(blocks.data(), bs + 1),
+                                std::span<uint8_t>(buf.data(), bs + 1)), std::invalid_argument);
     }
 }
 
@@ -254,7 +255,7 @@ TEST(Modes, Padding)
         for (size_t n = 0; n <= 2 * bs; n++)
         {
             std::vector<uint8_t> data(n, 0x80);
-            auto p = PadMethod2(data.data(), data.size(), bs);
+            auto p = PadMethod2(data, bs);
             EXPECT_EQ(p.size() % bs, 0u);
             EXPECT_GT(p.size(), n);
             ASSERT_TRUE(UnpadMethod2(p, bs));
