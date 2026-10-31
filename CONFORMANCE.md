@@ -1,88 +1,82 @@
-# Conformance with СТ РК 4009-2025
+# СТ РК 4009-2025 — заявление об исследовательском соответствии
 
-This repository implements the block cipher of СТ РК 4009-2025 «Информационные
-технологии. Криптографическая защита информации. Алгоритм блочного
-симметричного шифрования» (Qalqan) and the modes of operation of
-СТ РК ISO/IEC 10116-2019 that the standard's scope (1.1) refers to.
+**Область:** программный блочный примитив Qalqan в Rust, C++20 и Go;
+не государственная сертификация, не промышленное СКЗИ и не доказательство стойкости.
 
-## What every implementation must do
+## Параметры и интерпретация
 
-| Requirement | Source |
+| Параметр | Принято в реализации |
 |---|---|
-| Block length 128, 256 or 512 bits; other lengths rejected | 5 |
-| Key length 256…1024 bits in steps of 128; other lengths rejected | 5 |
-| N = 16 + (KLen − 256)/128 round keys | 5, Appendix A |
-| S and S⁻¹ (with the errata below) | 6.1, 9.2 |
-| L / L⁻¹ on little-endian 32-bit words (128/256) or 64-bit words (512), shifts of Table 2 | 6.2, Appendix A |
-| K^start and K^fin added/subtracted modulo 2^Blen, byte 0 least significant; middle keys XORed | 6.3, Appendix A |
-| Key schedule: L0 = {K0, K2, …, K30, K31}, L1 = {K1, K3, …, K29}; 17 warm-up steps; round-key byte = L0 feedback ∔ L1₄; extra key bytes added to the L1 feedback on even steps and to the L0 feedback on odd steps, after the round-key byte is taken | 8, Appendix A |
-| Appendix A reproduced byte for byte | Appendix A (mandatory) |
-| ECB, CBC, CFB, OFB, CTR | СТ РК ISO/IEC 10116-2019 |
+| Размер блока | 128, 256, 512 бит |
+| Размер ключа | 256..1024 бит с шагом 128 бит (7 размеров) |
+| Раундовые ключи | `N = 16 + (KLen - 256)/128` |
+| S и S^-1 | Таблицы восстановлены по обязательному Приложению А, см. ниже |
+| L и L^-1 | Little-endian 32-битные слова для 128/256 бит, 64-битные для 512 бит |
+| Сложение/вычитание крайних раундовых ключей | По модулю `2^Blen`, байт 0 — младший |
+| Средние раундовые ключи | XOR |
+| CTR | Счётчик занимает весь блок; big-endian инкремент (последний байт — младший) |
 
-Mode parameters used here: CBC with m = 1; CFB with r = n and j = k = n;
-OFB with j = n; CTR with j = n, the counter being the whole block incremented
-modulo 2ⁿ with the last byte least significant. CFB, OFB and CTR accept a
-final partial block. ISO/IEC 9797-1 padding method 2 is provided for ECB/CBC.
+**Важное разграничение:** стандартизованный блочный шифр и выбор параметров
+режимов — не одно и то же. Порядок счётчика CTR, padding и IV — решения
+программных реализаций, не следует выдавать их за однозначные требования
+СТ РК 4009-2025. Little-endian внутри преобразований Qalqan и big-endian
+счётчик CTR — разные соглашения.
 
-## Errata in the printed standard
+## Обнаруженные расхождения текста и принятая интерпретация (НЕ официальные поправки)
 
-The implementations follow Appendix A (mandatory), which agrees with the
-reference code of Appendix B, wherever the text differs:
+1. Напечатанная таблица S имеет повторения и не является перестановкой.
+   Для согласования с Приложением А принято:
+   `S(3c)=dc`, `S(48)=cc`, `S(f5)=1c`; обратная таблица согласована
+   с этими значениями (`S^-1(11)=dc`, `S^-1(9f)=1c`, `S^-1(af)=cc`).
+   Это техническая интерпретация, **не утверждённое исправление стандарта**.
+2. Формулы (5)/(9), прочитанные из изображения, могут расходиться по числу
+   раундов с разделом 7 и Приложением А; реализация следует последним.
+3. Пошаговые записи расписания ключей в Приложении А для ключей >256 бит
+   трактуются по строкам Round N key; некоторые промежуточные Output включают
+   уже добавленный байт расширенного ключа.
+4. Порядок байтов и некоторые отводы L1 в рисунке/формуле интерпретируются
+   по трассам Приложения А и эталонному примеру Приложения Б.
+5. Отмеченные в исходном коде проблемы reference C++ из Приложения Б
+   (сдвиг на 64 и нарушение выравнивания/strict aliasing) исправлялись
+   в репозитории; исходные нормативные тексты при этом не изменяются.
 
-1. **Table 1 and Table 3 are not permutations.** S(0x3c), S(0x48), S(0xf5) are
-   printed as `de`, `ce`, `1e`; the correct values are `dc`, `cc`, `1c`.
-   S⁻¹(0x11), S⁻¹(0x9f), S⁻¹(0xaf) are printed as `de`, `1e`, `ce`; correct:
-   `dc`, `1c`, `cc`. Several cells also contain Cyrillic `а`, `с`, `е` or the
-   letter `l` in place of hex digits.
-2. **Round count.** Formulas (5) and (9) iterate XSL₁…XSL_{N−1}, which would
-   need N + 1 round keys. Section 7 and Appendix A use N: K⁰ (⊞), XSL rounds
-   with K¹…K^{N−2}, K^{N−1} (⊞).
-3. **Key schedule, keys longer than 256 bits.** The value written as
-   L0₁₆ ∔ L1₄ uses the L0 feedback *before* the extra key byte is added. The
-   "Output" lines that Appendix A prints on odd steps include the added byte
-   and are not round-key bytes; the "Round N key" lines are authoritative.
-4. **Register update.** The formula for L1 reads `L1₁..L1₁₃`; it must be
-   `L1₁..L1₁₄` (L1 has 15 cells). Figure 3 draws the L1 taps at cells
-   0, 7, 11, 13, 14; the formula, Appendix B and Appendix A use 0, 3, 9, 12, 14.
-5. **Byte and word order** are not stated in the text; Appendix A fixes them as
-   described in the table above.
-6. **Appendix B code** shifts a 64-bit value by 64 in `ROTL64(x, 0)` (Table 2
-   has a 0 rotation for 512-bit blocks) and casts byte arrays to
-   `uint32_t*`/`uint64_t*`. Both are undefined behaviour; Clang at -O1 and above
-   drops the 512-bit linear layer, and the casts make the result depend on the
-   host byte order. The C++ here no longer does either.
+Для официального подтверждения разночтений требуется запрос к разработчику
+или уполномоченной организации. Независимая повторная транскрипция растровых
+таблиц/формул Приложений А и Б не проводилась.
 
-## Not covered by the standard
+## Данные испытаний и ограничение их независимости
 
-- **MAC (имитовставка).** Section 1.1 mentions integrity protection "in
-  accordance with СТ РК ISO/IEC 10116", but ISO/IEC 10116 defines no MAC and
-  4009-2025 specifies none. No mode here authenticates data.
-- **Interoperability choices** (CTR counter convention, padding, IV
-  generation) must be agreed with the other party.
-- **Certification.** Matching the test vectors is not certification. Use in
-  state systems requires a certified cryptographic tool; СТ РК 1073-2025 sets
-  the requirements for such tools.
+- **Приложение А:** 3 полных примера шифрования для ключа 256 бит,
+  155 раундовых ключей в транскрипции; исходные значения в растровом виде.
+- **KAT Приложения Б:** 84 тестовых случая для всех 21 сочетания блока и ключа.
+  Происхождение — эталонный код, не независимый криптографический оракул.
+- **Внешний TSV:** 168 случаев (21 × 8); происхождение и seed не
+  документированы, поэтому это проверка согласованности, не доказательство
+  независимости тестовых векторов.
+- **Режимы:** 54 KAT из ранее подготовленного набора; отдельная
+  нормативная верификация параметров ISO/IEC 10116 не проводилась.
+- **Прямая проверка рабочего `Kexp`** на 155 раундовых ключах включена в
+  постоянный набор тестов Go v21. В v22 добавлена временная проверка
+  рабочего расписания для Rust и C++ в тестовой копии — это свидетельство
+  финального gate, **но не постоянно включённая регрессия** Rust/C++.
+  Для последующих релизов её следует перенести в основной репозиторий.
+- **Время/побочные каналы:** эксперимент Rust v8 не содержит
+  секретно-зависимой индексации S-box в исследованных x86-64 сборках,
+  но строгая constant-time верификация не выполнена.
 
-## Shared test data (`resources/`)
+Свидетельства — журналы v15-v22, полный внешний аудит Claude v17 и
+проверочные исходники/фикстуры. Подробные SHA256 и версии компиляторов
+фиксируются в протоколах релизного прогона.
 
-| File | Content |
-|---|---|
-| `gold.txt` | Appendix A, as printed (all 28,768 hex digits of vector data checked against the standard's images). Generated from `input.bin`. |
-| `reference_kat.txt` | 84 cases, all 21 key/block combinations, produced by the Appendix B code (Appendix A only encrypts with 256-bit keys). |
-| `modes_kat.txt` | ECB/CBC/CFB/OFB/CTR cases for the three block sizes and 256/640/1024-bit keys, incl. partial blocks and counter wrap-around. |
+## Не входит в заявление о соответствии
 
-## Status
+Ни одна реализация не предоставляет гарантии целостности или аутентичности
+сообщения за счёт ECB/CBC/CFB/OFB/CTR. ISO/IEC 10116 — режимы
+конфиденциальности; в этом репозитории нет стандартизованного MAC/AEAD.
 
-C++, Go, Rust, C#, F# and Lean run the same checks against the shared data; the F* specification checks a selection of them by normalisation.
+Не подтверждены: соответствие требованиям государственного СКЗИ,
+сертификация, формальная криптостойкость, отсутствие cache/power/EMI утечек,
+безопасность протоколов, уникальность IV/nonce, ограничение объёма шифрования
+на ключ и полная переносимость на все архитектуры.
 
-| Implementation | How to run | What is checked |
-|---|---|---|
-| C++ (`src/`) | `cmake -B build && cmake --build build && ctest --test-dir build` (needs GoogleTest) | Appendix A byte for byte, 84 reference KATs, mode KATs, round trips for all 21 size combinations, invalid parameters, padding. GCC, Clang, ASan/UBSan. |
-| Go (`GostGolang/`) | `go test ./...` | Same, plus agreement with `crypto/cipher` CBC/CTR/OFB/CFB. |
-| Rust (`GostRust/`) | `cargo test -p gost` | Same (debug and release builds). |
-| C# (`GostCsharp/`) | `dotnet run -c Release -- --selftest` | Same. |
-| F# (`GostFSharp/`) | `dotnet run -c Release -- --selftest` | Same. |
-| Lean (`GostLean/`) | `lake build && lake exe gostlean --selftest` (Lean 4.12.0) | Same. |
-| F* (`GostFStar/`) | `./verify.sh` (fstar.exe 2025.03.25; about 5 minutes) | By normalisation while type-checking: S-box, Appendix A linear-layer examples, round keys of a 1024-bit key, Appendix A ciphertexts for all three block lengths, decryption, the largest reference KAT, all five modes, padding. |
-
-`.github/workflows/conformance.yml` runs all of the above.
+Ссылки на непроверенную нормативную базу для сертификации намеренно не включены.

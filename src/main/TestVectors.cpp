@@ -1,4 +1,4 @@
-#include "Qalqan.h"
+#include "QalqanInternal.h"
 #include <cstdlib>
 
 // Portable replacement for the MSVC-only fread_s: reads exactly n bytes.

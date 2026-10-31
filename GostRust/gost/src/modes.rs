@@ -136,6 +136,55 @@ pub fn ctr(c: &Cipher, iv: &[u8], buf: &mut [u8]) -> Result<(), ModeError> {
     Ok(())
 }
 
+/// Error from `ctr_no_wrap`. This check does not establish IV uniqueness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CtrRangeError {
+    IvLength,
+    CounterExhausted,
+}
+
+impl std::fmt::Display for CtrRangeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IvLength => f.write_str("qalqan: IV length must equal block size"),
+            Self::CounterExhausted => f.write_str("qalqan: CTR would advance past the maximum counter"),
+        }
+    }
+}
+
+impl std::error::Error for CtrRangeError {}
+
+/// CTR with a conservative range check, without changing the legacy `ctr` API.
+///
+/// The counter is a big-endian integer (last byte least significant).
+/// Require initial_counter + number_of_blocks <= 2^(8*block_size)-1.
+/// Thus a final increment to zero is not allowed, even if the last counter
+/// value would otherwise be used only once. Buffer is unchanged on error.
+///
+/// SECURITY LIMIT: this checks only arithmetic wraparound inside this call.
+/// It CANNOT prevent reuse/overlap of IV ranges across calls, processes, or
+/// machines, and it DOES NOT authenticate the ciphertext. Not an AEAD API.
+pub fn ctr_no_wrap(c: &Cipher, iv: &[u8], buf: &mut [u8]) -> Result<(), CtrRangeError> {
+    let blen = c.block_size();
+    if iv.len() != blen {
+        return Err(CtrRangeError::IvLength);
+    }
+    // Rounded up without overflowing `buf.len() + blen - 1`.
+    let blocks = buf.len() / blen + usize::from(buf.len() % blen != 0);
+    // Add the public block count to the big-endian IV without allocating.
+    // `carry` is bounded by usize; no secret-dependent indexing is involved.
+    let mut carry = blocks;
+    for &digit in iv.iter().rev() {
+        let sum = (digit as usize) + (carry & 0xff);
+        carry = (carry >> 8) + (sum >> 8);
+    }
+    if carry != 0 {
+        return Err(CtrRangeError::CounterExhausted);
+    }
+    // check_iv has already passed, so `ctr` must not reject this input.
+    ctr(c, iv, buf).map_err(|_| CtrRangeError::IvLength)
+}
+
 /// ISO/IEC 9797-1 padding method 2 (0x80, then zeros to a whole block).
 /// СТ РК 4009-2025 prescribes no padding; agree on one with the other party.
 pub fn pad_method2(data: &[u8], block_size: usize) -> Vec<u8> {

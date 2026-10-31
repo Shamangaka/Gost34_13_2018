@@ -283,7 +283,9 @@ func ShortTestBasicEnc(f io.Writer, src io.Reader) {
 	}
 
 	fmt.Fprintf(f, "Encryption of 128 bit block and 256 bit key\n")
-	Kexp(key, MINKEYLEN, MINBLOCKLEN, rkey)
+	if err := Kexp(key, MINKEYLEN, MINBLOCKLEN, rkey); err != nil {
+		panic("qalqan: test-vector key expansion failed: " + err.Error())
+	}
 	encryptV(data, rkey, MINKEYLEN, MINBLOCKLEN, cipher, f)
 	fmt.Fprintf(f, "\n")
 }
@@ -316,7 +318,9 @@ func ShortTestEnc(f io.Writer, src io.Reader) {
 		var blen = blen_vals[blen_ind]
 		var data []uint8 = make([]uint8, MAXBLOCKLEN)
 		var cipher []uint8 = make([]uint8, MAXBLOCKLEN)
-		Kexp(key, MINKEYLEN, blen, rkey)
+		if err := Kexp(key, MINKEYLEN, blen, rkey); err != nil {
+			panic("qalqan: test-vector key expansion failed: " + err.Error())
+		}
 		fmt.Fprintf(f, "\n***** Encryption, key length = %d, block len = %d *****\n", MINKEYLEN*8, blen*8)
 		encryptV(data, rkey, MINKEYLEN, blen, cipher, f)
 		fmt.Fprintf(f, "\n")

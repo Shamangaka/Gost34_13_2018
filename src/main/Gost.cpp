@@ -1,7 +1,7 @@
 // СТ РК 4009-2025 (draft: https://ksm.kz/public-discussion/standards/discussion-of-draft-of-st-rk/112716/)
 // Writes the Appendix A test vectors for resources/input.bin to resources/output.txt.
 #include <cstdio>
-#include "Qalqan.h"
+#include "QalqanInternal.h"
 
 int main()
 {
