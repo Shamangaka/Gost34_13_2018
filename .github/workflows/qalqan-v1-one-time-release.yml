@@ -1,0 +1,108 @@
+name: Publish Qalqan Research Core v1.0.0 (one-time)
+
+on:
+  push:
+    branches:
+      - automation/publish-qalqan-research-v1-0-0
+    paths:
+      - .github/workflows/qalqan-v1-one-time-release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    if: github.repository == 'Shamangaka/Gost34_13_2018'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate immutable release tag and default branch ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse 'qalqan-core-research-v1.0.0^{}')" = '3f1ed6c8f7567a16d4d9b686ed443a6e26a1334c'
+          git merge-base --is-ancestor '3f1ed6c8f7567a16d4d9b686ed443a6e26a1334c' origin/main
+          test "$(git cat-file -t 'qalqan-core-research-v1.0.0^{}')" = commit
+
+      - name: Archive the verified tag and create checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=Qalqan-Core-Research-v1.0.0.tar.gz
+          git archive --format=tar.gz --prefix=Qalqan-Core-Research-v1.0.0/ --output="$archive" qalqan-core-research-v1.0.0
+          sha256sum "$archive" | sed "s#  $PWD/#  #" > "${archive%.tar.gz}.sha256"
+          tar -tzf "$archive" > /dev/null
+          actual=$(sha256sum "$archive" | cut -d' ' -f1)
+          expected=354ddc10979e362690cef6d4dd9fa41949a69e5f5d58b36fcf4c140e2986187b
+          if [[ "$actual" != "$expected" ]]; then
+            echo '::warning::Archive differs in bytewise SHA-256 from locally generated Ubuntu archive; it is nevertheless generated from the identical verified Git tag.'
+          fi
+          printf '%s\n' "Archive SHA-256: $actual" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare self-contained release notes from tagged source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-body.md <<'EOF'
+          # Qalqan Research Core v1.0.0 — СТ РК 4009-2025
+
+          **Pre-release. RESEARCH ONLY.** Research implementations of the Qalqan symmetric block cipher in Rust, C++20, and Go. Not certified or approved as a cryptographic protection product; do not use to protect real confidential information.
+
+          ## Verified scope
+
+          - Research release commit: `3f1ed6c8f7567a16d4d9b686ed443a6e26a1334c`.
+          - User's v22 local gate on 2026-10-31: 19/19 checks PASS, including Rust debug/release, Go test/race/vet, GCC/Clang ASan+UBSan (9 tests each), 168 functional vectors and direct 155 round-key comparisons.
+          - GitHub conformance workflow: Rust, C++, Go, .NET, Lean and F* CI jobs passed for the research branch. Only Rust, C++ and Go were in the concluding security audit scope.
+          - 168 functional vectors have unverified provenance and do not independently prove normative correctness.
+
+          ## Security limits
+
+          - **C++ and Go are not constant-time:** S-box uses secret-indexed tables.
+          - Rust v8 S-box avoided secret-dependent lookup in inspected x86-64 builds, but comprehensive constant-time verification is **not** established.
+          - The supplied ECB/CBC/CFB/OFB/CTR modes do not authenticate ciphertext. Padding oracle and nonce/IV/key-stream reuse risks remain.
+          - Rust `ctr_no_wrap` provides opt-in intra-call counter-wrap checks only; it does not prevent cross-call overlap or IV reuse.
+          - Low-level C++ internals remain unsafe if their memory-size preconditions are violated. Public C++ API has bounds checks.
+          - Printed S-box inconsistencies and endian conventions rely on documented interpretation, not official corrections to the standard.
+          - Memory clearing is best effort. There is no certification, formal cryptographic security proof or production deployment approval.
+
+          See [`SECURITY.md`](https://github.com/Shamangaka/Gost34_13_2018/blob/qalqan-core-research-v1.0.0/SECURITY.md), [`CONFORMANCE.md`](https://github.com/Shamangaka/Gost34_13_2018/blob/qalqan-core-research-v1.0.0/CONFORMANCE.md), and [`RELEASE_NOTES_RESEARCH.md`](https://github.com/Shamangaka/Gost34_13_2018/blob/qalqan-core-research-v1.0.0/RELEASE_NOTES_RESEARCH.md).
+
+          ## Assets
+
+          `Qalqan-Core-Research-v1.0.0.tar.gz`: complete tagged Git source tree (includes additional language implementations outside this audit).
+
+          `Qalqan-Core-Research-v1.0.0.sha256`: SHA-256 checksum of the attached source archive, generated in this workflow.
+          EOF
+
+      - name: Publish GitHub pre-release with verified source archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view qalqan-core-research-v1.0.0 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo 'Release already exists; refusing to overwrite it.'
+            exit 0
+          fi
+          gh release create qalqan-core-research-v1.0.0 \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --prerelease \
+            --title 'Qalqan Research Core v1.0.0 — СТ РК 4009-2025' \
+            --notes-file release-body.md \
+            Qalqan-Core-Research-v1.0.0.tar.gz \
+            Qalqan-Core-Research-v1.0.0.sha256
+
+      - name: Verify published release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view qalqan-core-research-v1.0.0 --repo "$GITHUB_REPOSITORY" --json isPrerelease,tagName,assets,url --jq '{isPrerelease,tagName,url,assets:(.assets|map(.name))}'
